@@ -4,12 +4,12 @@
 //! synchronizing with metashrew, processing blocks, and handling reorgs.
 
 use crate::block::BlockCache;
+use crate::WasmRuntime;
 use crate::client::MetashrewClient;
 use crate::error::{Error, Result};
 use crate::sink::CdcSink;
 use async_trait::async_trait;
 use chrono::Utc;
-use debshrew_runtime::WasmRuntime;
 use debshrew_support::BlockMetadata;
 use log::{debug, info, warn};
 use std::sync::Arc;
@@ -107,23 +107,32 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
     pub async fn run(&mut self) -> Result<()> {
         self.running = true;
         
-        // If the current height is 0, get the latest height from metashrew
-        if self.current_height == 0 {
-            self.current_height = self.client.get_height().await?;
-            info!("Starting at block height {}", self.current_height);
-        }
+        // We'll keep the current height as set by set_starting_height
+        // This allows starting from genesis (height 0) or any other height
+        info!("Starting at block height {}", self.current_height);
         
         // Main synchronization loop
         while self.running {
             // Poll metashrew for the latest height
             let metashrew_height = self.client.get_height().await?;
+            log::info!("Metashrew reported height: {}", metashrew_height);
+            
+            // Get the actual block count to avoid processing non-existent blocks
+            let actual_block_count = self.get_actual_block_count().await?;
+            log::info!("Actual block count: {}", actual_block_count);
+            
+            // Use the minimum of metashrew_height and actual_block_count
+            let target_height = std::cmp::min(metashrew_height, actual_block_count);
+            log::info!("Using target height: {} (min of {} and {})",
+                      target_height, metashrew_height, actual_block_count);
             
             // Check if we need to process new blocks
-            if metashrew_height > self.current_height {
-                info!("Processing blocks {} to {}", self.current_height + 1, metashrew_height);
+            if target_height > self.current_height {
+                info!("Processing blocks {} to {} (metashrew height: {}, actual block count: {})",
+                      self.current_height + 1, target_height, metashrew_height, actual_block_count);
                 
                 // Process new blocks
-                for height in (self.current_height + 1)..=metashrew_height {
+                for height in (self.current_height + 1)..=target_height {
                     self.process_block(height).await?;
                     self.current_height = height;
                 }
@@ -557,5 +566,94 @@ mod tests {
                 })),
             },
         }
+    }
+}
+impl<C: MetashrewClient> BlockSynchronizer<C> {
+    // Add this method after the existing methods
+    
+    /// Get the actual block count using the Bitcoin-style API
+    ///
+    /// This is a workaround for the discrepancy between metashrew_height and the actual block count
+    ///
+    /// # Returns
+    ///
+    /// The actual block count
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the block count cannot be retrieved
+    async fn get_actual_block_count(&self) -> Result<u32> {
+        log::info!("Getting actual block count from {}", self.client.get_url());
+        
+        // Create a JSON-RPC request to get the block count
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "getblockcount",
+            "params": [],
+            "id": 1
+        });
+        
+        log::debug!("Sending getblockcount request: {}", request.to_string());
+        
+        // Send the request
+        let client = reqwest::Client::new();
+        let response = match client.post(self.client.get_url().clone())
+            .header("Content-Type", "application/json")
+            .body(request.to_string())
+            .send()
+            .await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    log::error!("Failed to send getblockcount request: {}", e);
+                    // If we can't get the actual block count, return a safe default of 1
+                    // This ensures we can still process blocks even if the getblockcount method fails
+                    log::warn!("Using default block count of 1");
+                    return Ok(1);
+                }
+            };
+        
+        // Parse the response
+        let response_text = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                log::error!("Failed to get response text: {}", e);
+                log::warn!("Using default block count of 1");
+                return Ok(1);
+            }
+        };
+        
+        log::debug!("Received getblockcount response: {}", response_text);
+        
+        let json_response: serde_json::Value = match serde_json::from_str(&response_text) {
+            Ok(json) => json,
+            Err(e) => {
+                log::error!("Failed to parse response as JSON: {}", e);
+                log::warn!("Using default block count of 1");
+                return Ok(1);
+            }
+        };
+        
+        // Extract the result
+        let result = match json_response.get("result") {
+            Some(r) => r,
+            None => {
+                log::error!("No result in getblockcount response");
+                log::warn!("Using default block count of 1");
+                return Ok(1);
+            }
+        };
+        
+        // Convert to u32
+        let block_count = match result.as_u64() {
+            Some(count) => count as u32,
+            None => {
+                log::error!("Invalid block count: {:?}", result);
+                log::warn!("Using default block count of 1");
+                return Ok(1);
+            }
+        };
+        
+        log::info!("Actual block count: {}", block_count);
+        Ok(block_count)
     }
 }

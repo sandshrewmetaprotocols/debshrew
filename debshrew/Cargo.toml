@@ -45,3 +45,11 @@ proptest.workspace = true
 tempfile.workspace = true
 test-log = "0.2"
 wiremock = "0.5"
+
+[[example]]
+name = "test_minimal_transform"
+path = "../examples/test_minimal_transform.rs"
+
+[[example]]
+name = "test_metashrew_api"
+path = "../examples/test_metashrew_api.rs"

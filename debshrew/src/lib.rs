@@ -54,6 +54,7 @@ pub mod block;
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod runtime;
 pub mod sink;
 pub mod synchronizer;
 
@@ -61,7 +62,7 @@ pub mod synchronizer;
 pub use block::BlockCache;
 pub use client::*;
 pub use config::*;
-pub use debshrew_runtime::WasmRuntime;
+pub use runtime::WasmRuntime;
 pub use debshrew_support;
 pub use error::{Error, Result};
 pub use sink::{CdcSink, create_sink, ConsoleSink, FileSink, KafkaSink, NullSink, PostgresSink};

@@ -6,12 +6,10 @@
 pub mod exports;
 pub mod imports;
 pub mod transform;
-pub mod wasm;
 pub mod error;
 
 pub use crate::transform::{DebTransform, TransformResult};
 pub use crate::error::{Error, Result};
-pub use crate::wasm::WasmRuntime;
 pub use anyhow;
 pub use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload, TransformState};
 pub use serde::{Serialize, Deserialize};

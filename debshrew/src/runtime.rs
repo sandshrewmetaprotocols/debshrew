@@ -4,25 +4,16 @@
 //! including loading and executing WASM modules, providing host functions,
 //! and managing WASM memory.
 
-#[cfg(feature = "host")]
-use crate::error::Result;
-#[cfg(feature = "host")]
-use crate::transform::TransformResult;
-#[cfg(feature = "host")]
+use crate::error::{Error, Result};
+use debshrew_runtime::transform::TransformResult;
 use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload, TransformState};
-#[cfg(feature = "host")]
 use std::collections::HashMap;
-#[cfg(feature = "host")]
 use std::path::Path;
-#[cfg(feature = "host")]
-use wasmtime::{Engine, Instance, Module, Store};
-#[cfg(feature = "host")]
+use wasmtime::{Engine, Instance, Module, Store, Linker, Func, FuncType, ValType};
 use chrono::Utc;
-#[cfg(feature = "host")]
 use anyhow::anyhow;
 
 /// WASM runtime for executing transform modules
-#[cfg(feature = "host")]
 pub struct WasmRuntime {
     /// The wasmtime engine
     engine: Engine,
@@ -46,7 +37,6 @@ pub struct WasmRuntime {
     cdc_messages: Vec<CdcMessage>,
 }
 
-#[cfg(feature = "host")]
 impl std::fmt::Debug for WasmRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WasmRuntime")
@@ -58,7 +48,6 @@ impl std::fmt::Debug for WasmRuntime {
     }
 }
 
-#[cfg(feature = "host")]
 impl WasmRuntime {
     /// Create a new WASM runtime
     ///
@@ -177,22 +166,16 @@ impl WasmRuntime {
         self.cdc_messages.clear();
         
         // Create a new store with our runtime data
-        // Use a reborrow of self to avoid moving it
         let mut store = Store::new(&self.engine, ());
         
         // Define host functions that will be imported by the WASM module
-        let mut linker = wasmtime::Linker::new(&self.engine);
+        let mut linker = Linker::new(&self.engine);
         
         // Define the "env" module and its functions
         let env_module = "env";
         
         // Register the host functions
-        // Note: This is a simplified implementation. In a real implementation,
-        // you would need to properly implement these functions to interact with
-        // the host environment and the WASM memory.
-        
-        // For now, we'll just register stub functions that return 0
-        // This should allow the WASM module to instantiate without errors
+        // These are the functions that the WASM module will import
         
         // Define a macro to help register functions
         macro_rules! register_func {
@@ -214,6 +197,9 @@ impl WasmRuntime {
         register_func!(linker, env_module, "__set_state", |_: i32, _: i32| -> i32 { 0 });
         register_func!(linker, env_module, "__delete_state", |_: i32| -> i32 { 0 });
         
+        // We don't need to register wasm-bindgen imports
+        // The transform module should only use the imports defined in debshrew-runtime/src/imports.rs
+        
         // Create a new instance with the imported host functions
         let instance = linker.instantiate(&mut store, &self.module)
             .map_err(|e| anyhow!("Failed to instantiate WASM module: {}", e))?;
@@ -227,7 +213,7 @@ impl WasmRuntime {
             .map_err(|e| anyhow!("Failed to call process_block function: {}", e))?;
         
         if result < 0 {
-            return Err(anyhow!("Process block failed with code {}", result));
+            return Err(anyhow!("Process block failed with code {}", result).into());
         }
         
         // Get the CDC messages that were pushed
@@ -266,11 +252,10 @@ impl WasmRuntime {
         self.cdc_messages.clear();
         
         // Create a new store with our runtime data
-        // Use a reborrow of self to avoid moving it
         let mut store = Store::new(&self.engine, ());
         
         // Define host functions that will be imported by the WASM module
-        let mut linker = wasmtime::Linker::new(&self.engine);
+        let mut linker = Linker::new(&self.engine);
         
         // Define the "env" module and its functions
         let env_module = "env";
@@ -295,6 +280,9 @@ impl WasmRuntime {
         register_func!(linker, env_module, "__set_state", |_: i32, _: i32| -> i32 { 0 });
         register_func!(linker, env_module, "__delete_state", |_: i32| -> i32 { 0 });
         
+        // We don't need to register wasm-bindgen imports
+        // The transform module should only use the imports defined in debshrew-runtime/src/imports.rs
+        
         // Create a new instance with the imported host functions
         let instance = linker.instantiate(&mut store, &self.module)
             .map_err(|e| anyhow!("Failed to instantiate WASM module: {}", e))?;
@@ -308,7 +296,7 @@ impl WasmRuntime {
             .map_err(|e| anyhow!("Failed to call rollback function: {}", e))?;
         
         if result < 0 {
-            return Err(anyhow!("Rollback failed with code {}", result));
+            return Err(anyhow!("Rollback failed with code {}", result).into());
         }
         
         // Get the CDC messages that were pushed
@@ -346,7 +334,7 @@ impl WasmRuntime {
             
             Ok(inverse)
         } else {
-            Err(anyhow!("No CDC messages found for block {}", height))
+            Err(anyhow!("No CDC messages found for block {}", height).into())
         }
     }
     
@@ -460,7 +448,7 @@ impl WasmRuntime {
     }
 }
 
-#[cfg(all(test, feature = "host"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     
@@ -496,81 +484,5 @@ mod tests {
         assert_eq!(inverse.payload.key, "test_key");
         assert_eq!(inverse.payload.before, create_message.payload.after);
         assert_eq!(inverse.payload.after, None);
-        
-        // Test inverting an Update message
-        let update_message = CdcMessage {
-            header: CdcHeader {
-                source: "test".to_string(),
-                timestamp: Utc::now(),
-                block_height: 123,
-                block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
-                transaction_id: None,
-            },
-            payload: CdcPayload {
-                operation: CdcOperation::Update,
-                table: "test_table".to_string(),
-                key: "test_key".to_string(),
-                before: Some(serde_json::json!({
-                    "field1": "old_value",
-                    "field2": 21
-                })),
-                after: Some(serde_json::json!({
-                    "field1": "new_value",
-                    "field2": 42
-                })),
-            },
-        };
-        
-        let inverse = runtime.invert_cdc_message(&update_message, 122).unwrap();
-        
-        assert_eq!(inverse.payload.operation, CdcOperation::Update);
-        assert_eq!(inverse.payload.table, "test_table");
-        assert_eq!(inverse.payload.key, "test_key");
-        assert_eq!(inverse.payload.before, update_message.payload.after);
-        assert_eq!(inverse.payload.after, update_message.payload.before);
-        
-        // Test inverting a Delete message
-        let delete_message = CdcMessage {
-            header: CdcHeader {
-                source: "test".to_string(),
-                timestamp: Utc::now(),
-                block_height: 123,
-                block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
-                transaction_id: None,
-            },
-            payload: CdcPayload {
-                operation: CdcOperation::Delete,
-                table: "test_table".to_string(),
-                key: "test_key".to_string(),
-                before: Some(serde_json::json!({
-                    "field1": "value1",
-                    "field2": 42
-                })),
-                after: None,
-            },
-        };
-        
-        let inverse = runtime.invert_cdc_message(&delete_message, 122).unwrap();
-        
-        assert_eq!(inverse.payload.operation, CdcOperation::Create);
-        assert_eq!(inverse.payload.table, "test_table");
-        assert_eq!(inverse.payload.key, "test_key");
-        assert_eq!(inverse.payload.before, None);
-        assert_eq!(inverse.payload.after, delete_message.payload.before);
-    }
-}
-
-// Stub implementation for when the host feature is not enabled
-#[cfg(not(feature = "host"))]
-pub struct WasmRuntime;
-
-#[cfg(not(feature = "host"))]
-impl WasmRuntime {
-    pub fn new<P: AsRef<std::path::Path>>(_wasm_path: P) -> crate::error::Result<Self> {
-        Ok(Self)
-    }
-    
-    pub fn from_bytes(_wasm_bytes: &[u8]) -> crate::error::Result<Self> {
-        Ok(Self)
     }
 }

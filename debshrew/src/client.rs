@@ -5,6 +5,7 @@
 use crate::error::{Error, Result};
 use crate::config::MetashrewConfig;
 use async_trait::async_trait;
+use log;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -57,6 +58,13 @@ pub trait MetashrewClient: Send + Sync {
     ///
     /// Returns an error if the request fails
     async fn call_view(&self, view_name: &str, params: &[u8], height: Option<u32>) -> Result<Vec<u8>>;
+    
+    /// Get the URL of the metashrew service
+    ///
+    /// # Returns
+    ///
+    /// The URL of the metashrew service
+    fn get_url(&self) -> &Url;
 }
 
 /// JSON-RPC request
@@ -73,6 +81,17 @@ struct JsonRpcRequest<T> {
     
     /// Request ID
     id: u32,
+}
+
+// Implement Debug for JsonRpcRequest to help with logging
+impl<T: Serialize> JsonRpcRequest<T> {
+    fn to_json_string(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "Failed to serialize request".to_string())
+    }
+    
+    fn to_json_string_pretty(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| "Failed to serialize request".to_string())
+    }
 }
 
 /// JSON-RPC response
@@ -97,7 +116,7 @@ struct JsonRpcResponse<T> {
 #[derive(Debug, Deserialize)]
 struct JsonRpcError {
     /// Error code
-    code: i32,
+    code: Option<i32>,
     
     /// Error message
     message: String,
@@ -145,6 +164,15 @@ impl JsonRpcClient {
             url,
             request_id: 0,
         })
+    }
+    
+    /// Get the URL of the metashrew service
+    ///
+    /// # Returns
+    ///
+    /// The URL of the metashrew service
+    pub fn get_url(&self) -> &Url {
+        &self.url
     }
     
     /// Create a new JSON-RPC client from a configuration
@@ -228,8 +256,17 @@ impl JsonRpcClient {
             id: self.next_request_id(),
         };
         
+        // Log the request for debugging
+        log::debug!("Sending JSONRPC request to {}: \n{}", self.url, request.to_json_string_pretty());
+        
+        // Manually serialize the request to JSON
+        let request_json = serde_json::to_string(&request)
+            .map_err(|e| Error::MetashrewClient(format!("Failed to serialize request: {}", e)))?;
+        
+        // Send the request with explicit Content-Type header
         let response = self.client.post(self.url.clone())
-            .json(&request)
+            .header("Content-Type", "application/json")
+            .body(request_json)
             .send()
             .await
             .map_err(|e| Error::MetashrewClient(format!("Failed to send request: {}", e)))?;
@@ -239,12 +276,18 @@ impl JsonRpcClient {
             return Err(Error::MetashrewClient(format!("HTTP error: {}", status)));
         }
         
-        let json_response: JsonRpcResponse<R> = response.json()
-            .await
-            .map_err(|e| Error::MetashrewClient(format!("Failed to parse response: {}", e)))?;
+        // Get the raw response text for debugging
+        let response_text = response.text().await
+            .map_err(|e| Error::MetashrewClient(format!("Failed to get response text: {}", e)))?;
+        
+        log::debug!("Received raw response: \n{}", response_text);
+        
+        // Parse the response as JSON
+        let json_response: JsonRpcResponse<R> = serde_json::from_str(&response_text)
+            .map_err(|e| Error::MetashrewClient(format!("Failed to parse response as JSON: {}\nRaw response: {}", e, response_text)))?;
         
         if let Some(error) = json_response.error {
-            return Err(Error::MetashrewClient(format!("JSON-RPC error: {} (code: {})", error.message, error.code)));
+            return Err(Error::MetashrewClient(format!("JSON-RPC error: {} (code: {})", error.message, error.code.unwrap_or_else(|| -1))));
         }
         
         json_response.result
@@ -256,16 +299,43 @@ impl JsonRpcClient {
 impl MetashrewClient for JsonRpcClient {
     async fn get_height(&self) -> Result<u32> {
         let mut client = self.clone();
-        let height: u32 = client.send_request("metashrew_height", ()).await?;
+        
+        // For get_height, we're sending an empty array as params
+        // The Metashrew service expects [] not null
+        // The result comes back as a string, so we need to parse it
+        let height_str: String = client.send_request("metashrew_height", Vec::<String>::new()).await?;
+        
+        // Parse the string as a u32
+        let height = height_str.parse::<u32>()
+            .map_err(|e| Error::MetashrewClient(format!("Failed to parse height '{}' as u32: {}", height_str, e)))?;
+        
+        log::debug!("Got height: {}", height);
         Ok(height)
     }
     
     async fn get_block_hash(&self, height: u32) -> Result<Vec<u8>> {
         let mut client = self.clone();
-        let hash: String = client.send_request("metashrew_blockHash", vec![height]).await?;
+        
+        // For get_block_hash, we're sending a vec with the height
+        // Let's use serde_json::Value to ensure proper JSON formatting
+        let params = serde_json::json!([height]);
+        log::debug!("Sending get_block_hash with params: {}", serde_json::to_string(&params).unwrap_or_default());
+        
+        let hash: String = client.send_request("metashrew_getblockhash", params).await?;
+        
+        log::debug!("Got block hash (hex): {}", hash);
+        
+        // Strip the '0x' prefix if present
+        let clean_hash = if hash.starts_with("0x") {
+            hash[2..].to_string()
+        } else {
+            hash
+        };
+        
+        log::debug!("Clean hash (after stripping 0x prefix): {}", clean_hash);
         
         // Convert hex string to bytes
-        let hash_bytes = hex::decode(hash)
+        let hash_bytes = hex::decode(clean_hash)
             .map_err(|e| Error::MetashrewClient(format!("Failed to decode block hash: {}", e)))?;
         
         Ok(hash_bytes)
@@ -277,20 +347,59 @@ impl MetashrewClient for JsonRpcClient {
         // Convert params to hex string
         let params_hex = hex::encode(params);
         
+        // Log the original params for debugging
+        log::debug!("Original params: {:?}", params);
+        log::debug!("Hex-encoded params: {}", params_hex);
+        
         // Prepare parameters for the view call
+        // The metashrew_view method expects an array of strings
+        // Let's try using a JSON array directly to ensure proper formatting
         let view_params = match height {
-            Some(h) => vec![view_name.to_string(), params_hex, h.to_string()],
-            None => vec![view_name.to_string(), params_hex, "latest".to_string()],
+            Some(h) => serde_json::json!([view_name, params_hex, h.to_string()]),
+            None => serde_json::json!([view_name, params_hex, "latest"]),
         };
+        
+        log::debug!("View params JSON: {}", serde_json::to_string_pretty(&view_params).unwrap_or_default());
         
         // Call the view function
         let result: String = client.send_request("metashrew_view", view_params).await?;
         
+        // Pretty print and log the result
+        log::info!("JSONRPC result from metashrew_view '{}': ", view_name);
+        
+        // Try to parse the result as JSON for pretty printing
+        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&result) {
+            // Pretty print the JSON
+            let pretty_json = serde_json::to_string_pretty(&json_value)
+                .unwrap_or_else(|_| result.clone());
+            
+            // Log each line of the pretty-printed JSON with proper indentation
+            for line in pretty_json.lines() {
+                log::info!("  {}", line);
+            }
+        } else {
+            // If it's not valid JSON, just log the raw result
+            log::info!("  {}", result);
+        }
+        
+        // Strip the '0x' prefix if present
+        let clean_result = if result.starts_with("0x") {
+            result[2..].to_string()
+        } else {
+            result
+        };
+        
+        log::debug!("Clean result (after stripping 0x prefix if present): {}", clean_result);
+        
         // Convert hex string to bytes
-        let result_bytes = hex::decode(result)
+        let result_bytes = hex::decode(clean_result)
             .map_err(|e| Error::MetashrewClient(format!("Failed to decode view result: {}", e)))?;
         
         Ok(result_bytes)
+    }
+    
+    fn get_url(&self) -> &Url {
+        &self.url
     }
 }
 
@@ -305,6 +414,9 @@ pub struct MockMetashrewClient {
     
     /// The view function results
     pub view_results: Vec<(String, Vec<u8>, Option<u32>, Vec<u8>)>,
+    
+    /// The mock URL
+    url: Url,
 }
 
 impl MockMetashrewClient {
@@ -318,6 +430,7 @@ impl MockMetashrewClient {
             height: 0,
             block_hashes: Vec::new(),
             view_results: Vec::new(),
+            url: Url::parse("http://localhost:18888").unwrap(),
         }
     }
     
@@ -380,11 +493,34 @@ impl MetashrewClient for MockMetashrewClient {
     async fn call_view(&self, view_name: &str, params: &[u8], height: Option<u32>) -> Result<Vec<u8>> {
         for (name, p, h, result) in &self.view_results {
             if name == view_name && p == params && h == &height {
+                // Log the result for consistency with the real client
+                log::info!("JSONRPC result from metashrew_view '{}' (mock): ", view_name);
+                
+                // Try to parse the result as JSON for pretty printing
+                let result_str = String::from_utf8_lossy(result);
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&result_str) {
+                    // Pretty print the JSON
+                    let pretty_json = serde_json::to_string_pretty(&json_value)
+                        .unwrap_or_else(|_| result_str.to_string());
+                    
+                    // Log each line of the pretty-printed JSON with proper indentation
+                    for line in pretty_json.lines() {
+                        log::info!("  {}", line);
+                    }
+                } else {
+                    // If it's not valid JSON, just log the raw result
+                    log::info!("  {:?}", result);
+                }
+                
                 return Ok(result.clone());
             }
         }
         
         Err(Error::MetashrewClient(format!("View result not found for {}", view_name)))
+    }
+    
+    fn get_url(&self) -> &Url {
+        &self.url
     }
 }
 

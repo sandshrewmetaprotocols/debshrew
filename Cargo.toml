@@ -3,7 +3,7 @@ members = [
     "debshrew",
     "debshrew-runtime",
     "debshrew-support",
-    "examples/simple-transform",
+    "examples/*"
 ]
 resolver = "2"
 

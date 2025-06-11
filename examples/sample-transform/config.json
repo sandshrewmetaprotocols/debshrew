@@ -1,0 +1,7 @@
+{
+  "bootstrap_servers": "localhost:9092",
+  "topic": "cdc-events",
+  "client_id": "debshrew-sample-transform",
+  "batch_size": 100,
+  "flush_interval": 1000
+}

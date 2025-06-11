@@ -10,8 +10,8 @@ use debshrew::{
     create_sink,
     error::Result,
     BlockSynchronizer,
+    WasmRuntime,
 };
-use debshrew_runtime::WasmRuntime;
 use env_logger::Env;
 use log::{error, info};
 use std::path::PathBuf;
@@ -48,15 +48,15 @@ enum Commands {
         sink_type: Option<String>,
         
         /// Path to the sink configuration file
-        #[clap(short, long)]
+        #[clap(short = 'f', long)]
         sink_config: Option<PathBuf>,
         
         /// Block cache size
-        #[clap(short, long, default_value = "6")]
+        #[clap(short = 'z', long, default_value = "6")]
         cache_size: u32,
         
         /// Starting block height
-        #[clap(short, long)]
+        #[clap(short = 'b', long)]
         start_height: Option<u32>,
         
         /// Log level
