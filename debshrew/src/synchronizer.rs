@@ -9,8 +9,8 @@ use crate::client::MetashrewClient;
 use crate::error::{Error, Result};
 use crate::sink::CdcSink;
 use async_trait::async_trait;
-use chrono::Utc;
 use debshrew_support::BlockMetadata;
+use std::time::{SystemTime, UNIX_EPOCH};
 use log::{debug, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +45,20 @@ pub struct BlockSynchronizer<C: MetashrewClient> {
 }
 
 impl<C: MetashrewClient> BlockSynchronizer<C> {
+    // Track the last time we logged a progress report
+    #[allow(dead_code)]
+    fn log_progress_report(&self, metashrew_height: u32, actual_block_count: u32) {
+        log::info!("Synchronization progress: current_height={}, metashrew_height={}, actual_block_count={}, progress={}%",
+            self.current_height,
+            metashrew_height,
+            actual_block_count,
+            if metashrew_height > 0 {
+                (self.current_height as f64 / metashrew_height as f64 * 100.0).round()
+            } else {
+                100.0
+            }
+        );
+    }
     /// Create a new block synchronizer
     ///
     /// # Arguments
@@ -121,7 +135,32 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
             let actual_block_count = self.get_actual_block_count().await?;
             log::info!("Actual block count: {}", actual_block_count);
             
-            // Use the minimum of metashrew_height and actual_block_count
+            // Log a progress report
+            self.log_progress_report(metashrew_height, actual_block_count);
+            
+            // Check if there's a significant discrepancy between metashrew_height and actual_block_count
+            if metashrew_height > actual_block_count && actual_block_count <= self.current_height {
+                log::warn!("Significant discrepancy detected: metashrew_height={}, actual_block_count={}, current_height={}",
+                          metashrew_height, actual_block_count, self.current_height);
+                
+                // If we're stuck at the same height for multiple iterations, try incrementing by 1
+                // This allows us to make progress even when there's a discrepancy
+                let target_height = self.current_height + 1;
+                
+                if target_height <= metashrew_height {
+                    log::info!("Attempting to process next block at height {} despite discrepancy", target_height);
+                    
+                    // Process the next block
+                    self.process_block(target_height).await?;
+                    self.current_height = target_height;
+                    
+                    // Sleep for the polling interval and continue
+                    time::sleep(Duration::from_millis(self.polling_interval)).await;
+                    continue;
+                }
+            }
+            
+            // Normal case: use the minimum of metashrew_height and actual_block_count
             let target_height = std::cmp::min(metashrew_height, actual_block_count);
             log::info!("Using target height: {} (min of {} and {})",
                       target_height, metashrew_height, actual_block_count);
@@ -176,7 +215,10 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
         let metadata = BlockMetadata {
             height,
             hash: hex::encode(&hash),
-            timestamp: Utc::now(),
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
         };
         
         // Process the block with the transform module
@@ -550,7 +592,10 @@ mod tests {
         CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: 123,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: None,
@@ -584,6 +629,7 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
     /// Returns an error if the block count cannot be retrieved
     async fn get_actual_block_count(&self) -> Result<u32> {
         log::info!("Getting actual block count from {}", self.client.get_url());
+        log::debug!("Current height before getting block count: {}", self.current_height);
         
         // Create a JSON-RPC request to get the block count
         let request = serde_json::json!({

@@ -3,6 +3,7 @@ members = [
     "debshrew",
     "debshrew-runtime",
     "debshrew-support",
+    "debshrew-test-consumer",
     "examples/*"
 ]
 resolver = "2"

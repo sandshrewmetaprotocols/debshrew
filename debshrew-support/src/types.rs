@@ -3,9 +3,9 @@
 //! This module defines the core data types used throughout the debshrew project,
 //! including CDC message types, state types, and other shared data structures.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// CDC message header
 ///
@@ -16,8 +16,8 @@ pub struct CdcHeader {
     /// Source of the CDC message (e.g., "debshrew", "token_protocol")
     pub source: String,
     
-    /// Timestamp when the CDC message was generated
-    pub timestamp: DateTime<Utc>,
+    /// Timestamp when the CDC message was generated (milliseconds since UNIX epoch)
+    pub timestamp: u64,
     
     /// Block height where the change occurred
     pub block_height: u32,
@@ -228,8 +228,8 @@ pub struct BlockMetadata {
     /// Block hash
     pub hash: String,
     
-    /// Block timestamp
-    pub timestamp: DateTime<Utc>,
+    /// Block timestamp (milliseconds since UNIX epoch)
+    pub timestamp: u64,
 }
 
 /// Block cache entry
@@ -251,14 +251,13 @@ pub struct BlockCacheEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
     
     #[test]
     fn test_cdc_message_serialization() {
         let message = CdcMessage {
             header: CdcHeader {
                 source: "test_source".to_string(),
-                timestamp: Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap(),
+                timestamp: 1672531200000, // 2023-01-01T00:00:00Z in milliseconds
                 block_height: 123456,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: Some("tx123".to_string()),

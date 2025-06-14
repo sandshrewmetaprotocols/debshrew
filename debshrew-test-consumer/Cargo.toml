@@ -1,0 +1,17 @@
+[package]
+name = "debshrew-test-consumer"
+version = "0.1.0"
+edition = "2021"
+description = "Test consumer for Debshrew CDC messages"
+
+[dependencies]
+clap.workspace = true
+env_logger.workspace = true
+log.workspace = true
+rdkafka = { version = "0.34" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+debshrew-support = { path = "../debshrew-support" }

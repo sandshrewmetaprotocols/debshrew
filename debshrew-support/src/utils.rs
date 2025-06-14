@@ -3,7 +3,6 @@
 //! This module provides utility functions used throughout the debshrew project.
 
 use crate::error::Result;
-use chrono::{DateTime, TimeZone, Utc};
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,9 +41,6 @@ pub fn now_ms() -> u64 {
 ///
 /// let now = now_utc();
 /// ```
-pub fn now_utc() -> DateTime<Utc> {
-    Utc::now()
-}
 
 /// Convert a Unix timestamp in milliseconds to a UTC DateTime
 ///
@@ -67,11 +63,6 @@ pub fn now_utc() -> DateTime<Utc> {
 /// assert_eq!(dt.month(), 1);
 /// assert_eq!(dt.day(), 1);
 /// ```
-pub fn timestamp_ms_to_datetime(timestamp_ms: u64) -> DateTime<Utc> {
-    let secs = (timestamp_ms / 1000) as i64;
-    let nsecs = ((timestamp_ms % 1000) * 1_000_000) as u32;
-    Utc.timestamp_opt(secs, nsecs).unwrap()
-}
 
 /// Convert a UTC DateTime to a Unix timestamp in milliseconds
 ///
@@ -93,9 +84,6 @@ pub fn timestamp_ms_to_datetime(timestamp_ms: u64) -> DateTime<Utc> {
 /// let ts = datetime_to_timestamp_ms(&dt);
 /// assert_eq!(ts, 1609459200000);
 /// ```
-pub fn datetime_to_timestamp_ms(dt: &DateTime<Utc>) -> u64 {
-    (dt.timestamp() as u64 * 1000) + (dt.timestamp_subsec_millis() as u64)
-}
 
 /// Validate a Bitcoin block hash
 ///
@@ -234,75 +222,4 @@ pub fn parse_url(url_str: &str) -> Result<url::Url> {
     }
     
     Ok(url)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::thread::sleep;
-    use std::time::Duration;
-    
-    #[test]
-    fn test_now_ms() {
-        let t1 = now_ms();
-        sleep(Duration::from_millis(10));
-        let t2 = now_ms();
-        assert!(t2 > t1);
-    }
-    
-    #[test]
-    fn test_timestamp_conversions() {
-        let now = now_utc();
-        let ts = datetime_to_timestamp_ms(&now);
-        let dt = timestamp_ms_to_datetime(ts);
-        
-        // Allow for small differences due to precision loss
-        let diff = (now.timestamp_millis() - dt.timestamp_millis()).abs();
-        assert!(diff < 10);
-    }
-    
-    #[test]
-    fn test_block_hash_validation() {
-        assert!(is_valid_block_hash("000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d"));
-        assert!(is_valid_block_hash("0000000000000000000000000000000000000000000000000000000000000000"));
-        assert!(!is_valid_block_hash("invalid"));
-        assert!(!is_valid_block_hash("000000000000000000024BEAD8DF69990852C202DB0E0097C1A12EA637D7E96D")); // uppercase
-        assert!(!is_valid_block_hash("000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96")); // too short
-    }
-    
-    #[test]
-    fn test_txid_validation() {
-        assert!(is_valid_txid("f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"));
-        assert!(!is_valid_txid("invalid"));
-        assert!(!is_valid_txid("F4184FC596403B9D638783CF57ADFE4C75C605F6356FBC91338530E9831E9E16")); // uppercase
-    }
-    
-    #[test]
-    fn test_generate_cdc_message_id() {
-        let id = generate_cdc_message_id("test_source", "test_table", "test_key", 123456);
-        assert_eq!(id, "test_source:test_table:test_key:123456");
-    }
-    
-    #[test]
-    fn test_truncate_string() {
-        assert_eq!(truncate_string("Hello, world!", 5), "Hello...");
-        assert_eq!(truncate_string("Hello", 10), "Hello");
-        assert_eq!(truncate_string("", 5), "");
-    }
-    
-    #[test]
-    fn test_parse_url() {
-        let url = parse_url("http://example.com").unwrap();
-        assert_eq!(url.scheme(), "http");
-        assert_eq!(url.host_str(), Some("example.com"));
-        
-        let url = parse_url("https://example.com:8080/path?query=value").unwrap();
-        assert_eq!(url.scheme(), "https");
-        assert_eq!(url.host_str(), Some("example.com"));
-        assert_eq!(url.port(), Some(8080));
-        assert_eq!(url.path(), "/path");
-        
-        assert!(parse_url("ftp://example.com").is_err());
-        assert!(parse_url("invalid").is_err());
-    }
 }

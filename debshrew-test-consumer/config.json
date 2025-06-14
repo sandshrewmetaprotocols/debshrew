@@ -1,0 +1,7 @@
+{
+  "bootstrap_servers": "localhost:9092",
+  "topic": "cdc-events",
+  "group_id": "debshrew-test-consumer",
+  "auto_offset_reset": "earliest",
+  "session_timeout_ms": 30000
+}

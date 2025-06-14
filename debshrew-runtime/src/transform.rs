@@ -111,14 +111,17 @@ impl DebTransform for MockTransform {
 mod tests {
     use super::*;
     use debshrew_support::{CdcHeader, CdcOperation, CdcPayload};
-    use chrono::Utc;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_transform_result() {
         let messages = vec![CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: 123,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: None,

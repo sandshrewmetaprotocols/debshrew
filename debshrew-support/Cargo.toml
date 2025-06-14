@@ -18,7 +18,6 @@ bincode.workspace = true
 hex.workspace = true
 
 # External dependencies
-chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.4", features = ["v4", "serde", "js"] }
 url = "2.4"
 regex = "1.9"

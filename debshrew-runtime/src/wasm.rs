@@ -17,9 +17,9 @@ use std::path::Path;
 #[cfg(feature = "host")]
 use wasmtime::{Engine, Instance, Module, Store};
 #[cfg(feature = "host")]
-use chrono::Utc;
-#[cfg(feature = "host")]
 use anyhow::anyhow;
+#[cfg(feature = "host")]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// WASM runtime for executing transform modules
 #[cfg(feature = "host")]
@@ -386,7 +386,10 @@ impl WasmRuntime {
         Ok(CdcMessage {
             header: CdcHeader {
                 source: message.header.source.clone(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: new_height,
                 block_hash: hex::encode(&self.current_hash),
                 transaction_id: None,
@@ -472,7 +475,10 @@ mod tests {
         let create_message = CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: 123,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: None,
@@ -501,7 +507,10 @@ mod tests {
         let update_message = CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: 123,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: None,
@@ -533,7 +542,10 @@ mod tests {
         let delete_message = CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: 123,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: None,

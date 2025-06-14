@@ -9,9 +9,10 @@ use debshrew_runtime::transform::TransformResult;
 use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload, TransformState};
 use std::collections::HashMap;
 use std::path::Path;
-use wasmtime::{Engine, Instance, Module, Store, Linker, Func, FuncType, ValType};
-use chrono::Utc;
+use wasmtime::{Engine, Instance, Module, Store, Linker, Func, FuncType, ValType, Memory};
 use anyhow::anyhow;
+use std::time::{SystemTime, UNIX_EPOCH};
+use crate::client::{JsonRpcClient, SyncMetashrewClient};
 
 /// WASM runtime for executing transform modules
 pub struct WasmRuntime {
@@ -185,14 +186,176 @@ impl WasmRuntime {
             };
         }
         
+        // Create a buffer to store data for the WASM module to read
+        let mut shared_buffer: Vec<u8> = Vec::new();
+        
+        // Create a new instance with the imported host functions
+        let instance = linker.instantiate(&mut store, &self.module)
+            .map_err(|e| anyhow!("Failed to instantiate WASM module: {}", e))?;
+        
         // Register all the required functions
-        register_func!(linker, env_module, "__load", |_: i32| {});
-        register_func!(linker, env_module, "__view", |_: i32, _: i32| -> i32 { 0 });
-        register_func!(linker, env_module, "__stdout", |_: i32| {});
-        register_func!(linker, env_module, "__stderr", |_: i32| {});
-        register_func!(linker, env_module, "__height", || -> i32 { 0 });
-        register_func!(linker, env_module, "__block_hash", || -> i32 { 0 });
-        register_func!(linker, env_module, "__push_cdc_message", |_: i32| -> i32 { 0 });
+        register_func!(linker, env_module, "__load", {
+            let shared_buffer = &shared_buffer;
+            move |ptr: i32| {
+                if !shared_buffer.is_empty() {
+                    // Copy data from shared buffer to WASM memory
+                    let memory = instance.get_memory(&mut store, "memory")
+                        .expect("Failed to get memory");
+                    memory.write(&mut store, ptr as usize, &shared_buffer)
+                        .expect("Failed to write to memory");
+                }
+            }
+        });
+        
+        register_func!(linker, env_module, "__view", {
+            let mut shared_buffer = &mut shared_buffer;
+            let memory = instance.get_memory(&mut store, "memory")
+                .expect("Failed to get memory");
+            
+            move |view_name_ptr: i32, input_ptr: i32| -> i32 {
+                use std::str;
+                
+                // Create a client to call metashrew
+                let client = JsonRpcClient::new("http://localhost:18888")
+                    .expect("Failed to create metashrew client");
+                
+                // Read the view name length (first 4 bytes)
+                let mut name_len_bytes = [0u8; 4];
+                memory.read(&store, view_name_ptr as usize, &mut name_len_bytes)
+                    .expect("Failed to read name length");
+                let name_len = u32::from_le_bytes(name_len_bytes) as usize;
+                
+                // Read the view name
+                let mut name_bytes = vec![0u8; name_len];
+                memory.read(&store, (view_name_ptr + 4) as usize, &mut name_bytes)
+                    .expect("Failed to read view name");
+                let view_name = match str::from_utf8(&name_bytes) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        eprintln!("Invalid UTF-8 in view name: {}", e);
+                        return -1;
+                    }
+                };
+                
+                // Read the input length (first 4 bytes)
+                let mut input_len_bytes = [0u8; 4];
+                memory.read(&store, input_ptr as usize, &mut input_len_bytes)
+                    .expect("Failed to read input length");
+                let input_len = u32::from_le_bytes(input_len_bytes) as usize;
+                
+                // Read the input
+                let mut input_bytes = vec![0u8; input_len];
+                memory.read(&store, (input_ptr + 4) as usize, &mut input_bytes)
+                    .expect("Failed to read input");
+                
+                println!("Calling view function '{}' with {} bytes of input", view_name, input_len);
+                
+                // Call the view function
+                match client.call_view(view_name, &input_bytes) {
+                    Ok(result) => {
+                        println!("View function '{}' returned {} bytes", view_name, result.len());
+                        // Store the result in the shared buffer
+                        *shared_buffer = result;
+                        shared_buffer.len() as i32
+                    },
+                    Err(e) => {
+                        eprintln!("Error calling view function: {}", e);
+                        -1
+                    }
+                }
+            }
+        });
+        
+        register_func!(linker, env_module, "__stdout", |ptr: i32| {
+            // Get the memory to read the string
+            let memory = instance.get_memory(&mut store, "memory")
+                .expect("Failed to get memory");
+            
+            // Read the string length (first 4 bytes)
+            let mut len_bytes = [0u8; 4];
+            memory.read(&store, ptr as usize, &mut len_bytes)
+                .expect("Failed to read string length");
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            // Read the string
+            let mut bytes = vec![0u8; len];
+            memory.read(&store, (ptr + 4) as usize, &mut bytes)
+                .expect("Failed to read string");
+            
+            // Print the string
+            if let Ok(s) = std::str::from_utf8(&bytes) {
+                print!("{}", s);
+            }
+        });
+        
+        register_func!(linker, env_module, "__stderr", |ptr: i32| {
+            // Get the memory to read the string
+            let memory = instance.get_memory(&mut store, "memory")
+                .expect("Failed to get memory");
+            
+            // Read the string length (first 4 bytes)
+            let mut len_bytes = [0u8; 4];
+            memory.read(&store, ptr as usize, &mut len_bytes)
+                .expect("Failed to read string length");
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            // Read the string
+            let mut bytes = vec![0u8; len];
+            memory.read(&store, (ptr + 4) as usize, &mut bytes)
+                .expect("Failed to read string");
+            
+            // Print the string
+            if let Ok(s) = std::str::from_utf8(&bytes) {
+                eprint!("{}", s);
+            }
+        });
+        
+        register_func!(linker, env_module, "__height", {
+            let height = self.current_height;
+            move || -> i32 { height as i32 }
+        });
+        
+        register_func!(linker, env_module, "__block_hash", {
+            let hash = &self.current_hash;
+            let mut shared_buffer = &mut shared_buffer;
+            move || -> i32 {
+                *shared_buffer = hash.clone();
+                hash.len() as i32
+            }
+        });
+        
+        register_func!(linker, env_module, "__push_cdc_message", {
+            let mut cdc_messages = &mut self.cdc_messages;
+            move |ptr: i32| -> i32 {
+                // Get the memory to read the CDC message
+                let memory = instance.get_memory(&mut store, "memory")
+                    .expect("Failed to get memory");
+                
+                // Read the message length (first 4 bytes)
+                let mut len_bytes = [0u8; 4];
+                memory.read(&store, ptr as usize, &mut len_bytes)
+                    .expect("Failed to read message length");
+                let len = u32::from_le_bytes(len_bytes) as usize;
+                
+                // Read the message
+                let mut bytes = vec![0u8; len];
+                memory.read(&store, (ptr + 4) as usize, &mut bytes)
+                    .expect("Failed to read message");
+                
+                // Parse the CDC message
+                match serde_json::from_slice::<CdcMessage>(&bytes) {
+                    Ok(message) => {
+                        cdc_messages.push(message);
+                        0
+                    },
+                    Err(e) => {
+                        eprintln!("Error parsing CDC message: {}", e);
+                        -1
+                    }
+                }
+            }
+        });
+        
         register_func!(linker, env_module, "__get_state", |_: i32| -> i32 { 0 });
         register_func!(linker, env_module, "__set_state", |_: i32, _: i32| -> i32 { 0 });
         register_func!(linker, env_module, "__delete_state", |_: i32| -> i32 { 0 });
@@ -268,14 +431,172 @@ impl WasmRuntime {
             };
         }
         
-        // Register all the required functions
-        register_func!(linker, env_module, "__load", |_: i32| {});
-        register_func!(linker, env_module, "__view", |_: i32, _: i32| -> i32 { 0 });
-        register_func!(linker, env_module, "__stdout", |_: i32| {});
-        register_func!(linker, env_module, "__stderr", |_: i32| {});
-        register_func!(linker, env_module, "__height", || -> i32 { 0 });
-        register_func!(linker, env_module, "__block_hash", || -> i32 { 0 });
-        register_func!(linker, env_module, "__push_cdc_message", |_: i32| -> i32 { 0 });
+        // Create a buffer to store data for the WASM module to read
+        let mut shared_buffer: Vec<u8> = Vec::new();
+        
+        // Register all the required functions with the same implementations as in process_block
+        register_func!(linker, env_module, "__load", {
+            let shared_buffer = &shared_buffer;
+            move |ptr: i32| {
+                if !shared_buffer.is_empty() {
+                    // Copy data from shared buffer to WASM memory
+                    let memory = instance.get_memory(&mut store, "memory")
+                        .expect("Failed to get memory");
+                    memory.write(&mut store, ptr as usize, &shared_buffer)
+                        .expect("Failed to write to memory");
+                }
+            }
+        });
+        
+        register_func!(linker, env_module, "__view", {
+            let mut shared_buffer = &mut shared_buffer;
+            let memory = instance.get_memory(&mut store, "memory")
+                .expect("Failed to get memory");
+            
+            move |view_name_ptr: i32, input_ptr: i32| -> i32 {
+                use std::str;
+                
+                // Create a client to call metashrew
+                let client = JsonRpcClient::new("http://localhost:18888")
+                    .expect("Failed to create metashrew client");
+                
+                // Read the view name length (first 4 bytes)
+                let mut name_len_bytes = [0u8; 4];
+                memory.read(&store, view_name_ptr as usize, &mut name_len_bytes)
+                    .expect("Failed to read name length");
+                let name_len = u32::from_le_bytes(name_len_bytes) as usize;
+                
+                // Read the view name
+                let mut name_bytes = vec![0u8; name_len];
+                memory.read(&store, (view_name_ptr + 4) as usize, &mut name_bytes)
+                    .expect("Failed to read view name");
+                let view_name = match str::from_utf8(&name_bytes) {
+                    Ok(name) => name,
+                    Err(e) => {
+                        eprintln!("Invalid UTF-8 in view name: {}", e);
+                        return -1;
+                    }
+                };
+                
+                // Read the input length (first 4 bytes)
+                let mut input_len_bytes = [0u8; 4];
+                memory.read(&store, input_ptr as usize, &mut input_len_bytes)
+                    .expect("Failed to read input length");
+                let input_len = u32::from_le_bytes(input_len_bytes) as usize;
+                
+                // Read the input
+                let mut input_bytes = vec![0u8; input_len];
+                memory.read(&store, (input_ptr + 4) as usize, &mut input_bytes)
+                    .expect("Failed to read input");
+                
+                println!("Calling view function '{}' with {} bytes of input", view_name, input_len);
+                
+                // Call the view function
+                match client.call_view(view_name, &input_bytes) {
+                    Ok(result) => {
+                        println!("View function '{}' returned {} bytes", view_name, result.len());
+                        // Store the result in the shared buffer
+                        *shared_buffer = result;
+                        shared_buffer.len() as i32
+                    },
+                    Err(e) => {
+                        eprintln!("Error calling view function: {}", e);
+                        -1
+                    }
+                }
+            }
+        });
+        
+        register_func!(linker, env_module, "__stdout", |ptr: i32| {
+            // Get the memory to read the string
+            let memory = instance.get_memory(&mut store, "memory")
+                .expect("Failed to get memory");
+            
+            // Read the string length (first 4 bytes)
+            let mut len_bytes = [0u8; 4];
+            memory.read(&store, ptr as usize, &mut len_bytes)
+                .expect("Failed to read string length");
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            // Read the string
+            let mut bytes = vec![0u8; len];
+            memory.read(&store, (ptr + 4) as usize, &mut bytes)
+                .expect("Failed to read string");
+            
+            // Print the string
+            if let Ok(s) = std::str::from_utf8(&bytes) {
+                print!("{}", s);
+            }
+        });
+        
+        register_func!(linker, env_module, "__stderr", |ptr: i32| {
+            // Get the memory to read the string
+            let memory = instance.get_memory(&mut store, "memory")
+                .expect("Failed to get memory");
+            
+            // Read the string length (first 4 bytes)
+            let mut len_bytes = [0u8; 4];
+            memory.read(&store, ptr as usize, &mut len_bytes)
+                .expect("Failed to read string length");
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            // Read the string
+            let mut bytes = vec![0u8; len];
+            memory.read(&store, (ptr + 4) as usize, &mut bytes)
+                .expect("Failed to read string");
+            
+            // Print the string
+            if let Ok(s) = std::str::from_utf8(&bytes) {
+                eprint!("{}", s);
+            }
+        });
+        
+        register_func!(linker, env_module, "__height", {
+            let height = self.current_height;
+            move || -> i32 { height as i32 }
+        });
+        
+        register_func!(linker, env_module, "__block_hash", {
+            let hash = &self.current_hash;
+            let mut shared_buffer = &mut shared_buffer;
+            move || -> i32 {
+                *shared_buffer = hash.clone();
+                hash.len() as i32
+            }
+        });
+        
+        register_func!(linker, env_module, "__push_cdc_message", {
+            let mut cdc_messages = &mut self.cdc_messages;
+            move |ptr: i32| -> i32 {
+                // Get the memory to read the CDC message
+                let memory = instance.get_memory(&mut store, "memory")
+                    .expect("Failed to get memory");
+                
+                // Read the message length (first 4 bytes)
+                let mut len_bytes = [0u8; 4];
+                memory.read(&store, ptr as usize, &mut len_bytes)
+                    .expect("Failed to read message length");
+                let len = u32::from_le_bytes(len_bytes) as usize;
+                
+                // Read the message
+                let mut bytes = vec![0u8; len];
+                memory.read(&store, (ptr + 4) as usize, &mut bytes)
+                    .expect("Failed to read message");
+                
+                // Parse the CDC message
+                match serde_json::from_slice::<CdcMessage>(&bytes) {
+                    Ok(message) => {
+                        cdc_messages.push(message);
+                        0
+                    },
+                    Err(e) => {
+                        eprintln!("Error parsing CDC message: {}", e);
+                        -1
+                    }
+                }
+            }
+        });
+        
         register_func!(linker, env_module, "__get_state", |_: i32| -> i32 { 0 });
         register_func!(linker, env_module, "__set_state", |_: i32, _: i32| -> i32 { 0 });
         register_func!(linker, env_module, "__delete_state", |_: i32| -> i32 { 0 });
@@ -374,7 +695,10 @@ impl WasmRuntime {
         Ok(CdcMessage {
             header: CdcHeader {
                 source: message.header.source.clone(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: new_height,
                 block_hash: hex::encode(&self.current_hash),
                 transaction_id: None,
@@ -460,7 +784,10 @@ mod tests {
         let create_message = CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
                 block_height: 123,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: None,

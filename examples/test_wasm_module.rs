@@ -1,26 +1,10 @@
-use debshrew::client::MockMetashrewClient;
-use debshrew::sink::ConsoleSink;
 use debshrew::WasmRuntime;
-use debshrew::synchronizer::BlockSynchronizer;
 use std::path::Path;
 use alkanes_support::proto::alkanes::BlockResponse;
 use protobuf::Message;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a mock metashrew client
-    let mut client = MockMetashrewClient::new();
-    
-    // Set up the mock client with some test data
-    client.set_height(10);
-    
-    // Add block hashes for heights 0 through 10
-    for i in 0..=10 {
-        // Create a simple hash (in a real scenario, this would be a proper hash)
-        let hash = vec![i as u8; 32]; // 32-byte hash
-        client.set_block_hash(i, hash);
-    }
-    
     // Load the sample transform WASM module
     let wasm_path = Path::new("./target/wasm32-unknown-unknown/release/sample_transform.wasm");
     println!("Loading WASM module from {:?}", wasm_path);
@@ -31,9 +15,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.register_view_function(
         "getblock",
         Box::new(|_params| {
+            println!("Mock getblock view function called");
+            
             // Create a minimal valid Bitcoin block bytes
-            // This is a simplified version that just contains enough data to be parsed
-            // by the consensus_decode function in the sample-transform
             let block_bytes = vec![
                 // Version (4 bytes)
                 1, 0, 0, 0,
@@ -59,34 +43,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             // Serialize the response to bytes
             match response.write_to_bytes() {
-                Ok(bytes) => Ok(bytes),
+                Ok(bytes) => {
+                    println!("Mock getblock view function returning {} bytes", bytes.len());
+                    Ok(bytes)
+                },
                 Err(e) => Err(format!("Failed to serialize BlockResponse: {}", e).into())
             }
         })
     );
     
-    // Create a console sink to output CDC messages
-    let sink = Box::new(ConsoleSink::new(true)); // true for pretty printing
+    // Set up the runtime with test data
+    runtime.set_current_height(10);
+    runtime.set_current_hash(vec![10 as u8; 32]); // 32-byte hash
     
-    // Create a block synchronizer with a cache size of 6
-    let mut synchronizer = BlockSynchronizer::new(client, runtime, sink, 6)?;
-    
-    // Set a short polling interval (100ms)
-    synchronizer.set_polling_interval(100);
-    
-    // Run the synchronizer for a short time
-    println!("Starting block synchronization");
-    let sync_task = tokio::spawn(async move {
-        if let Err(e) = synchronizer.run().await {
-            eprintln!("Synchronizer error: {}", e);
-        }
-    });
-    
-    // Let it run for 2 seconds
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
-    // Abort the synchronization task
-    sync_task.abort();
+    // Process a block
+    println!("Processing block...");
+    match runtime.process_block(10, vec![10 as u8; 32]) {
+        Ok(_) => println!("Block processed successfully"),
+        Err(e) => println!("Error processing block: {:?}", e),
+    }
     
     println!("Test completed successfully");
     Ok(())

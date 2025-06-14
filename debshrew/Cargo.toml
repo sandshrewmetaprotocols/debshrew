@@ -26,7 +26,7 @@ rdkafka.workspace = true
 postgres.workspace = true
 
 # Internal dependencies
-debshrew-runtime = { path = "../debshrew-runtime", features = ["testing"] }
+debshrew-runtime = { path = "../debshrew-runtime" }
 debshrew-support = { path = "../debshrew-support" }
 
 # External dependencies
@@ -38,8 +38,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 metrics = "0.21"
 metrics-exporter-prometheus = "0.12"
+protobuf = "3.7.2"
+alkanes-support = { git = "https://github.com/kungfuflex/alkanes-rs", rev = "88d2af6c" }
+bitcoin = "0.32.6"
 
 [dev-dependencies]
+debshrew-runtime = { path = "../debshrew-runtime", features = ["test-utils"] }
 mockall.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
@@ -53,3 +57,7 @@ path = "../examples/test_minimal_transform.rs"
 [[example]]
 name = "test_metashrew_api"
 path = "../examples/test_metashrew_api.rs"
+
+[[example]]
+name = "test_wasm_module"
+path = "../examples/test_wasm_module.rs"

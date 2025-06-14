@@ -38,10 +38,6 @@ pub enum Error {
     #[error("Regex error: {0}")]
     Regex(#[from] regex::Error),
 
-    /// Error occurred during chrono operations
-    #[error("Chrono error: {0}")]
-    Chrono(#[from] chrono::ParseError),
-
     /// Error occurred during CDC message generation
     #[error("CDC message error: {0}")]
     CdcMessage(String),
