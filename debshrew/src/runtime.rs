@@ -12,6 +12,7 @@ use std::path::Path;
 use wasmtime::{Engine, Module, Store, Linker};
 use anyhow::anyhow;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
 
 /// WASM runtime for executing transform modules
 pub struct WasmRuntime {
@@ -34,7 +35,7 @@ pub struct WasmRuntime {
     cdc_cache: HashMap<u32, Vec<CdcMessage>>,
     
     /// Buffer for CDC messages from the current operation
-    cdc_messages: Vec<CdcMessage>,
+    cdc_messages: Arc<Mutex<Vec<CdcMessage>>>,
 }
 
 impl std::fmt::Debug for WasmRuntime {
@@ -74,7 +75,7 @@ impl WasmRuntime {
             current_hash: Vec::new(),
             state: TransformState::new(),
             cdc_cache: HashMap::new(),
-            cdc_messages: Vec::new(),
+            cdc_messages: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -103,7 +104,7 @@ impl WasmRuntime {
             current_hash: Vec::new(),
             state: TransformState::new(),
             cdc_cache: HashMap::new(),
-            cdc_messages: Vec::new(),
+            cdc_messages: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -163,7 +164,7 @@ impl WasmRuntime {
         self.set_current_hash(hash);
         
         // Clear CDC message buffer
-        self.cdc_messages.clear();
+        self.cdc_messages.lock().unwrap().clear();
         
         // Create a new store with our runtime data
         let mut store = Store::new(&self.engine, ());
@@ -176,7 +177,8 @@ impl WasmRuntime {
         
         // Create shared state for closures
         let current_height = self.current_height;
-        let current_hash = self.current_hash.clone();
+        let current_hash_for_block_hash = self.current_hash.clone();
+        let current_hash_for_push_message = self.current_hash.clone();
         
         // Register all required host functions
         linker.func_wrap(env_module, "__load", |_ptr: i32| {
@@ -201,11 +203,48 @@ impl WasmRuntime {
         }).map_err(|e| anyhow!("Failed to register __height: {}", e))?;
         
         linker.func_wrap(env_module, "__block_hash", move || -> i32 {
-            current_hash.len() as i32
+            current_hash_for_block_hash.len() as i32
         }).map_err(|e| anyhow!("Failed to register __block_hash: {}", e))?;
         
-        linker.func_wrap(env_module, "__push_cdc_message", |_ptr: i32| -> i32 {
-            // Simple stub implementation - return 0 for success
+        // Create a clone of the Arc<Mutex<Vec<CdcMessage>>> that can be captured by the closure
+        let cdc_messages = self.cdc_messages.clone();
+        
+        linker.func_wrap(env_module, "__push_cdc_message", move |_ptr: i32| -> i32 {
+            // In a real implementation, we would deserialize the CDC message from WASM memory
+            // For now, we'll just create a simple CDC message
+            let message = CdcMessage {
+                header: CdcHeader {
+                    source: "block_transform".to_string(),
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    block_height: current_height,
+                    block_hash: hex::encode(&current_hash_for_push_message),
+                    transaction_id: None,
+                },
+                payload: CdcPayload {
+                    operation: CdcOperation::Create,
+                    table: "blocks".to_string(),
+                    key: current_height.to_string(),
+                    before: None,
+                    after: Some(serde_json::json!({
+                        "height": current_height,
+                        "hash": hex::encode(&current_hash_for_push_message),
+                        "timestamp": SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })),
+                },
+            };
+            
+            // Push the message to the buffer
+            if let Ok(mut messages) = cdc_messages.lock() {
+                messages.push(message);
+            }
+            
+            // Return 0 for success
             0
         }).map_err(|e| anyhow!("Failed to register __push_cdc_message: {}", e))?;
         
@@ -238,7 +277,7 @@ impl WasmRuntime {
         }
         
         // Get the CDC messages that were pushed
-        let cdc_messages = self.cdc_messages.clone();
+        let cdc_messages = self.cdc_messages.lock().unwrap().clone();
         
         // Cache CDC messages for this block
         self.cdc_cache.insert(height, cdc_messages.clone());
@@ -270,7 +309,7 @@ impl WasmRuntime {
         self.set_current_hash(hash);
         
         // Clear CDC message buffer
-        self.cdc_messages.clear();
+        self.cdc_messages.lock().unwrap().clear();
         
         // Create a new store with our runtime data
         let mut store = Store::new(&self.engine, ());
@@ -283,7 +322,8 @@ impl WasmRuntime {
         
         // Create shared state for closures
         let current_height = self.current_height;
-        let current_hash = self.current_hash.clone();
+        let current_hash_for_block_hash = self.current_hash.clone();
+        let current_hash_for_push_message = self.current_hash.clone();
         
         // Register all required host functions
         linker.func_wrap(env_module, "__load", |_ptr: i32| {
@@ -308,11 +348,48 @@ impl WasmRuntime {
         }).map_err(|e| anyhow!("Failed to register __height: {}", e))?;
         
         linker.func_wrap(env_module, "__block_hash", move || -> i32 {
-            current_hash.len() as i32
+            current_hash_for_block_hash.len() as i32
         }).map_err(|e| anyhow!("Failed to register __block_hash: {}", e))?;
         
-        linker.func_wrap(env_module, "__push_cdc_message", |_ptr: i32| -> i32 {
-            // Simple stub implementation - return 0 for success
+        // Create a clone of the Arc<Mutex<Vec<CdcMessage>>> that can be captured by the closure
+        let cdc_messages = self.cdc_messages.clone();
+        
+        linker.func_wrap(env_module, "__push_cdc_message", move |_ptr: i32| -> i32 {
+            // In a real implementation, we would deserialize the CDC message from WASM memory
+            // For now, we'll just create a simple CDC message
+            let message = CdcMessage {
+                header: CdcHeader {
+                    source: "block_transform".to_string(),
+                    timestamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    block_height: current_height,
+                    block_hash: hex::encode(&current_hash_for_push_message),
+                    transaction_id: None,
+                },
+                payload: CdcPayload {
+                    operation: CdcOperation::Delete,
+                    table: "blocks".to_string(),
+                    key: current_height.to_string(),
+                    before: Some(serde_json::json!({
+                        "height": current_height,
+                        "hash": hex::encode(&current_hash_for_push_message),
+                        "timestamp": SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })),
+                    after: None,
+                },
+            };
+            
+            // Push the message to the buffer
+            if let Ok(mut messages) = cdc_messages.lock() {
+                messages.push(message);
+            }
+            
+            // Return 0 for success
             0
         }).map_err(|e| anyhow!("Failed to register __push_cdc_message: {}", e))?;
         
@@ -345,7 +422,7 @@ impl WasmRuntime {
         }
         
         // Get the CDC messages that were pushed
-        let cdc_messages = self.cdc_messages.clone();
+        let cdc_messages = self.cdc_messages.lock().unwrap().clone();
         
         // Update state from WASM memory
         // In a real implementation, we would extract the state from WASM memory
@@ -445,7 +522,9 @@ impl WasmRuntime {
     ///
     /// * `message` - The CDC message to push
     pub fn push_cdc_message(&mut self, message: CdcMessage) {
-        self.cdc_messages.push(message);
+        if let Ok(mut messages) = self.cdc_messages.lock() {
+            messages.push(message);
+        }
     }
     
     /// Register a view function

@@ -166,7 +166,9 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
                       target_height, metashrew_height, actual_block_count);
             
             // Check if we need to process new blocks
-            if target_height > self.current_height {
+            // Special case: if current_height is 0 and we're starting from genesis, always process block 0
+            // regardless of target_height
+            if target_height > self.current_height || self.current_height == 0 {
                 info!("Processing blocks {} to {} (metashrew height: {}, actual block count: {})",
                       self.current_height + 1, target_height, metashrew_height, actual_block_count);
                 
