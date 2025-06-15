@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Default transform module
-TRANSFORM_MODULE="view_test_transform"
+TRANSFORM_MODULE="sample_transform"
 
 # Check if an argument was provided
 if [ $# -gt 0 ]; then

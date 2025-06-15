@@ -85,10 +85,6 @@ struct JsonRpcRequest<T> {
 
 // Implement Debug for JsonRpcRequest to help with logging
 impl<T: Serialize> JsonRpcRequest<T> {
-    fn to_json_string(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "Failed to serialize request".to_string())
-    }
-    
     fn to_json_string_pretty(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_else(|_| "Failed to serialize request".to_string())
     }
