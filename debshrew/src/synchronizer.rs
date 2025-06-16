@@ -177,11 +177,61 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
                     self.process_block(height).await?;
                     self.current_height = height;
                 }
-            } else if metashrew_height < self.current_height {
-                // Handle reorg
-                warn!("Chain reorganization detected: metashrew height {} < current height {}", metashrew_height, self.current_height);
-                self.handle_reorg(metashrew_height).await?;
-                self.current_height = metashrew_height;
+            } else if self.current_height > 0 {
+                // Check for reorgs by comparing the hash of the current block
+                // Get the cached hash for the current height
+                let cached_hash = {
+                    let cache = self.cache.lock().await;
+                    if let Some(cached_block) = cache.get_block_at_height(self.current_height) {
+                        Some(cached_block.metadata.hash.clone())
+                    } else {
+                        None
+                    }
+                }; // Lock is released here
+                
+                // If we have a cached hash, compare it with the current hash from metashrew
+                if let Some(cached_hash) = cached_hash {
+                    // Get the current hash from metashrew
+                    match self.client.get_block_hash(self.current_height).await {
+                        Ok(current_hash) => {
+                            let current_hash_hex = hex::encode(&current_hash);
+                            
+                            // Compare with our cached hash
+                            if current_hash_hex != cached_hash {
+                                // Hash mismatch indicates a reorg
+                                warn!("Chain reorganization detected: hash mismatch at height {}. Cached: {}, Current: {}",
+                                      self.current_height, cached_hash, current_hash_hex);
+                                
+                                // Handle the reorg
+                                self.handle_reorg(self.current_height - 1).await?;
+                                
+                                // After handling reorg, we'll continue from the common ancestor
+                                // No need to update current_height here as handle_reorg already does that
+                            }
+                        },
+                        Err(e) => {
+                            // If we can't get the hash, it might be a deeper reorg
+                            warn!("Failed to get block hash at height {}: {}. Possible deep reorg.", self.current_height, e);
+                            
+                            // Try to find the highest block that exists in both chains
+                            let mut test_height = self.current_height - 1;
+                            while test_height > 0 {
+                                if let Ok(_) = self.client.get_block_hash(test_height).await {
+                                    // Found a block that exists, handle reorg from here
+                                    warn!("Found existing block at height {}. Handling reorg.", test_height);
+                                    self.handle_reorg(test_height).await?;
+                                    break;
+                                }
+                                test_height -= 1;
+                                if test_height == 0 {
+                                    // If we reach genesis, handle reorg from there
+                                    warn!("Deep reorg detected, rolling back to genesis.");
+                                    self.handle_reorg(0).await?;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             
             // Sleep for the polling interval
@@ -211,7 +261,21 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
     /// Returns an error if the block cannot be processed
     async fn process_block(&self, height: u32) -> Result<()> {
         // Get the block hash
-        let hash = self.client.get_block_hash(height).await?;
+        let hash = match self.client.get_block_hash(height).await {
+            Ok(hash) => hash,
+            Err(e) => {
+                // Check if the error is because the block hash is not found
+                if e.to_string().contains("Block hash not found") || e.to_string().contains("code: -32000") {
+                    // This is likely because we're trying to process a block that doesn't exist yet
+                    // Log this as info rather than error, and return without processing
+                    info!("Block at height {} not available yet, will retry later", height);
+                    return Ok(());
+                } else {
+                    // For other errors, propagate them
+                    return Err(e);
+                }
+            }
+        };
         
         // Create block metadata
         let metadata = BlockMetadata {
