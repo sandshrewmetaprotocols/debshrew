@@ -7,6 +7,11 @@ pub mod exports;
 pub mod imports;
 pub mod transform;
 pub mod error;
+pub mod stdio;
+pub mod wasm;
+
+#[cfg(feature = "test-utils")]
+pub mod test_utils;
 
 pub use crate::transform::{DebTransform, TransformResult};
 pub use crate::error::{Error, Result};
@@ -14,6 +19,10 @@ pub use anyhow;
 pub use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload, TransformState};
 pub use serde::{Serialize, Deserialize};
 pub use serde_json;
+pub use crate::stdio::{stdout, write_stdout, write_stderr};
+
+#[cfg(feature = "test-utils")]
+pub use crate::test_utils::TestRunner;
 
 /// Safe wrapper for calling a view and loading its result
 pub fn view(view_name: String, input: Vec<u8>) -> Result<Vec<u8>> {
@@ -96,55 +105,7 @@ pub fn deserialize_result<T: for<'de> Deserialize<'de>>(result: &[u8]) -> Result
         .map_err(|e| anyhow::anyhow!("Failed to deserialize result: {}", e))
 }
 
-/// Safely write to stdout
-pub fn write_stdout(msg: &str) {
-    let bytes = msg.as_bytes();
-    let mut encoded = Vec::with_capacity(4 + bytes.len());
-    encoded.extend_from_slice(&(bytes.len() as u32).to_ne_bytes());
-    encoded.extend_from_slice(bytes);
-    unsafe {
-        imports::__stdout(encoded.as_ptr() as i32);
-    }
-}
-
-/// Safely write to stderr
-pub fn write_stderr(msg: &str) {
-    let bytes = msg.as_bytes();
-    let mut encoded = Vec::with_capacity(4 + bytes.len());
-    encoded.extend_from_slice(&(bytes.len() as u32).to_ne_bytes());
-    encoded.extend_from_slice(bytes);
-    unsafe {
-        imports::__stderr(encoded.as_ptr() as i32);
-    }
-}
-
-#[macro_export]
-macro_rules! println {
-    ($($arg:tt)*) => {{
-        $crate::write_stdout(&(format!($($arg)*) + "\n"));
-    }};
-}
-
-#[macro_export]
-macro_rules! eprintln {
-    ($($arg:tt)*) => {{
-        $crate::write_stderr(&(format!($($arg)*) + "\n"));
-    }};
-}
-
-#[macro_export]
-macro_rules! print {
-    ($($arg:tt)*) => {{
-        $crate::write_stdout(&format!($($arg)*));
-    }};
-}
-
-#[macro_export]
-macro_rules! eprint {
-    ($($arg:tt)*) => {{
-        $crate::write_stderr(&format!($($arg)*));
-    }};
-}
+// No need to re-export the stdio module since it's already public
 
 /// Declare a transform module
 ///

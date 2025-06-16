@@ -1,5 +1,5 @@
 use debshrew_runtime::{self, DebTransform};
-use debshrew_runtime::{CdcMessage, CdcHeader, CdcOperation, CdcPayload};
+use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload};
 
 #[derive(Default, Clone, Debug)]
 pub struct ViewTestTransform {
@@ -7,7 +7,7 @@ pub struct ViewTestTransform {
 }
 
 impl DebTransform for ViewTestTransform {
-    fn process_block(&mut self) -> debshrew_runtime::Result<()> {
+    fn process_block(&mut self) -> debshrew_runtime::error::Result<Vec<CdcMessage>> {
         // Get current block info
         let height = debshrew_runtime::get_height();
         let hash = debshrew_runtime::get_block_hash();
@@ -65,13 +65,12 @@ impl DebTransform for ViewTestTransform {
             },
         };
         
-        // Push CDC message to Kafka
-        debshrew_runtime::println!("ViewTestTransform: Pushing CDC message to Kafka...");
-        self.push_message(message)?;
+        // Return CDC message
+        debshrew_runtime::println!("ViewTestTransform: Creating CDC message...");
         
         debshrew_runtime::println!("ViewTestTransform: Block processing complete");
         
-        Ok(())
+        Ok(vec![message])
     }
 }
 
