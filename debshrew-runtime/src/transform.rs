@@ -21,32 +21,32 @@ pub trait DebTransform: Default + Debug + Clone {
     ///
     /// # Returns
     ///
-    /// Ok(()) if processing was successful
+    /// A vector of CDC messages if processing was successful
     ///
     /// # Errors
     ///
     /// Returns an error if processing fails
-    fn process_block(&mut self) -> Result<()>;
+    fn process_block(&mut self) -> Result<Vec<CdcMessage>>;
 
     /// Generate inverse CDC messages for rollback
     ///
     /// This method is called during chain reorganizations. It should generate
     /// inverse CDC messages that undo the changes from the rolled-back blocks.
     ///
-    /// The default implementation does nothing, as the runtime will automatically
-    /// generate inverse CDC messages based on the original messages.
+    /// The default implementation returns an empty vector, as the runtime can
+    /// automatically generate inverse CDC messages based on the original messages.
     ///
     /// # Returns
     ///
-    /// Ok(()) if rollback was successful
+    /// A vector of CDC messages for the rollback if successful
     ///
     /// # Errors
     ///
     /// Returns an error if rollback fails
-    fn rollback(&mut self) -> Result<()> {
-        // Default implementation does nothing
-        // The runtime will automatically generate inverse CDC messages
-        Ok(())
+    fn rollback(&mut self) -> Result<Vec<CdcMessage>> {
+        // Default implementation returns an empty vector
+        // The runtime can automatically generate inverse CDC messages
+        Ok(Vec::new())
     }
 }
 
@@ -98,12 +98,12 @@ pub struct MockTransform {
 }
 
 impl DebTransform for MockTransform {
-    fn process_block(&mut self) -> Result<()> {
-        Ok(())
+    fn process_block(&mut self) -> Result<Vec<CdcMessage>> {
+        Ok(self.process_block_messages.clone())
     }
     
-    fn rollback(&mut self) -> Result<()> {
-        Ok(())
+    fn rollback(&mut self) -> Result<Vec<CdcMessage>> {
+        Ok(self.rollback_messages.clone())
     }
 }
 

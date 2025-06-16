@@ -81,20 +81,8 @@ pub fn delete_state(key: &[u8]) -> bool {
     unsafe { imports::__delete_state(encoded_key.as_ptr() as i32) > 0 }
 }
 
-/// Push a CDC message to the host
-pub fn push_cdc_message(message: &CdcMessage) -> Result<()> {
-    let serialized = serde_json::to_vec(message)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize CDC message: {}", e))?;
-    
-    let encoded = exports::to_arraybuffer_layout(&serialized);
-    
-    let result = unsafe { imports::__push_cdc_message(encoded.as_ptr() as i32) };
-    if result < 0 {
-        return Err(anyhow::anyhow!("Failed to push CDC message"));
-    }
-    
-    Ok(())
-}
+// The push_cdc_message function is no longer needed as we now return
+// a complete list of CDC messages at the end of execution
 
 /// Serialize parameters for a view function
 pub fn serialize_params<T: Serialize>(params: &T) -> Result<Vec<u8>> {
@@ -164,8 +152,10 @@ macro_rules! eprint {
 #[macro_export]
 macro_rules! declare_transform {
     ($transform:ty) => {
-        use debshrew_runtime::push_cdc_message;
         use debshrew_runtime::Result;
+        use std::boxed::Box;
+        use std::alloc::{alloc, Layout};
+        use std::mem;
         
         static mut INSTANCE: Option<$transform> = None;
 
@@ -188,10 +178,33 @@ macro_rules! declare_transform {
                     Ok(instance)
                 }
             }
+        }
+
+        // Helper function to serialize CDC messages and return a pointer
+        fn serialize_cdc_messages(messages: Vec<debshrew_runtime::CdcMessage>) -> i32 {
+            let serialized = match serde_json::to_vec(&messages) {
+                Ok(data) => data,
+                Err(e) => {
+                    $crate::eprintln!("Failed to serialize CDC messages: {}", e);
+                    return -1;
+                }
+            };
             
-            // Helper method to push CDC messages
-            pub fn push_message(&self, message: debshrew_runtime::CdcMessage) -> Result<()> {
-                push_cdc_message(&message)
+            // Allocate memory that will not be freed (intentional leak)
+            // This memory will be read by the host and then can be freed
+            unsafe {
+                let layout = Layout::array::<u8>(serialized.len() + 4).unwrap();
+                let ptr = alloc(layout) as *mut u8;
+                
+                // Write the length as a 32-bit little-endian integer
+                let len_bytes = (serialized.len() as u32).to_le_bytes();
+                ptr.copy_from(len_bytes.as_ptr(), 4);
+                
+                // Write the serialized data
+                ptr.add(4).copy_from(serialized.as_ptr(), serialized.len());
+                
+                // Return the pointer as an i32
+                ptr as i32
             }
         }
 
@@ -209,15 +222,15 @@ macro_rules! declare_transform {
                 
                 // Process block
                 match instance.process_block() {
-                    Ok(()) => {
+                    Ok(cdc_messages) => {
                         // Save state after successful processing
                         if let Err(e) = instance.save() {
                             $crate::eprintln!("Failed to save transform state: {}", e);
                             return -1;
                         }
                         
-                        // Success - CDC messages were pushed via push_message
-                        0
+                        // Serialize CDC messages and return pointer
+                        serialize_cdc_messages(cdc_messages)
                     }
                     Err(e) => {
                         $crate::eprintln!("Transform failed: {}", e);
@@ -241,15 +254,15 @@ macro_rules! declare_transform {
                 
                 // Process rollback
                 match instance.rollback() {
-                    Ok(()) => {
+                    Ok(cdc_messages) => {
                         // Save state after successful rollback
                         if let Err(e) = instance.save() {
                             $crate::eprintln!("Failed to save transform state: {}", e);
                             return -1;
                         }
                         
-                        // Success - CDC messages were pushed via push_message
-                        0
+                        // Serialize CDC messages and return pointer
+                        serialize_cdc_messages(cdc_messages)
                     }
                     Err(e) => {
                         $crate::eprintln!("Rollback failed: {}", e);

@@ -11,7 +11,6 @@ extern "C" {
     pub fn __stderr(s: i32);
     pub fn __height() -> i32;
     pub fn __block_hash() -> i32;
-    pub fn __push_cdc_message(msg: i32) -> i32;
     pub fn __get_state(key: i32) -> i32;
     pub fn __set_state(key: i32, value: i32) -> i32;
     pub fn __delete_state(key: i32) -> i32;
@@ -44,11 +43,6 @@ pub mod exports {
     }
     
     pub fn __block_hash() -> i32 {
-        // Test implementation
-        0
-    }
-    
-    pub fn __push_cdc_message(_msg: i32) -> i32 {
         // Test implementation
         0
     }
