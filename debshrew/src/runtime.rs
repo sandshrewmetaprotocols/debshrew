@@ -180,12 +180,56 @@ impl WasmRuntime {
             0
         }).map_err(|e| anyhow!("Failed to register __view: {}", e))?;
         
-        linker.func_wrap(env_module, "__stdout", |_ptr: i32| {
-            // Simple stub implementation
+        linker.func_wrap(env_module, "__stdout", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+            // Read the message from WASM memory
+            let memory = match caller.get_export("memory") {
+                Some(wasmtime::Extern::Memory(mem)) => mem,
+                _ => return, // No memory export, can't read the message
+            };
+            
+            // Read the length (first 4 bytes)
+            let mut len_bytes = [0u8; 4];
+            if memory.read(&caller, ptr as usize, &mut len_bytes).is_err() {
+                return; // Failed to read length
+            }
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            // Read the message
+            let mut message = vec![0u8; len];
+            if memory.read(&caller, (ptr + 4) as usize, &mut message).is_err() {
+                return; // Failed to read message
+            }
+            
+            // Convert to string and log
+            if let Ok(s) = std::str::from_utf8(&message) {
+                log::info!("[WASM stdout] {}", s.trim_end());
+            }
         }).map_err(|e| anyhow!("Failed to register __stdout: {}", e))?;
         
-        linker.func_wrap(env_module, "__stderr", |_ptr: i32| {
-            // Simple stub implementation
+        linker.func_wrap(env_module, "__stderr", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+            // Read the message from WASM memory
+            let memory = match caller.get_export("memory") {
+                Some(wasmtime::Extern::Memory(mem)) => mem,
+                _ => return, // No memory export, can't read the message
+            };
+            
+            // Read the length (first 4 bytes)
+            let mut len_bytes = [0u8; 4];
+            if memory.read(&caller, ptr as usize, &mut len_bytes).is_err() {
+                return; // Failed to read length
+            }
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            // Read the message
+            let mut message = vec![0u8; len];
+            if memory.read(&caller, (ptr + 4) as usize, &mut message).is_err() {
+                return; // Failed to read message
+            }
+            
+            // Convert to string and log
+            if let Ok(s) = std::str::from_utf8(&message) {
+                log::warn!("[WASM stderr] {}", s.trim_end());
+            }
         }).map_err(|e| anyhow!("Failed to register __stderr: {}", e))?;
         
         linker.func_wrap(env_module, "__height", move || -> i32 {
