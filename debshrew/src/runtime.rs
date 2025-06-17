@@ -5,13 +5,18 @@
 //! and managing WASM memory.
 
 use crate::error::Result;
+use crate::client::MetashrewClient;
 use debshrew_runtime::transform::TransformResult;
 use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload, TransformState};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use wasmtime::{Engine, Module, Store, Linker};
 use anyhow::anyhow;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+// Static buffer to store view function results
+static mut VIEW_RESULT_BUFFER: Vec<u8> = Vec::new();
 
 /// WASM runtime for executing transform modules
 pub struct WasmRuntime {
@@ -171,13 +176,123 @@ impl WasmRuntime {
         let current_hash_for_block_hash = self.current_hash.clone();
         
         // Register all required host functions
-        linker.func_wrap(env_module, "__load", |_ptr: i32| {
-            // Simple stub implementation
+        linker.func_wrap(env_module, "__load", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+            // Get the memory export
+            let memory = match caller.get_export("memory") {
+                Some(wasmtime::Extern::Memory(mem)) => mem,
+                _ => {
+                    log::error!("No memory export found in WASM module");
+                    return;
+                }
+            };
+            
+            // Write the view result to WASM memory
+            unsafe {
+                if VIEW_RESULT_BUFFER.is_empty() {
+                    log::warn!("View result buffer is empty");
+                    return;
+                }
+                
+                // Write the length first (4 bytes)
+                let len_bytes = (VIEW_RESULT_BUFFER.len() as u32).to_le_bytes();
+                if memory.write(&mut caller, ptr as usize, &len_bytes).is_err() {
+                    log::error!("Failed to write view result length");
+                    return;
+                }
+                
+                // Then write the data
+                if memory.write(&mut caller, (ptr + 4) as usize, &VIEW_RESULT_BUFFER).is_err() {
+                    log::error!("Failed to write view result data");
+                    return;
+                }
+                
+                log::debug!("Wrote {} bytes of view result to WASM memory", VIEW_RESULT_BUFFER.len());
+            }
         }).map_err(|e| anyhow!("Failed to register __load: {}", e))?;
         
-        linker.func_wrap(env_module, "__view", |_view_name_ptr: i32, _input_ptr: i32| -> i32 {
-            // Simple stub implementation - return 0 for success
-            0
+        // Create a reference to the client for the view function
+        let client_clone = Arc::new(crate::client::JsonRpcClient::new("http://localhost:18888").unwrap());
+        
+        linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, ()>, view_name_ptr: i32, input_ptr: i32| -> i32 {
+            // Get the memory export
+            let memory = match caller.get_export("memory") {
+                Some(wasmtime::Extern::Memory(mem)) => mem,
+                _ => {
+                    log::error!("No memory export found in WASM module");
+                    return -1;
+                }
+            };
+            
+            // Read the view name
+            let mut view_name_len_bytes = [0u8; 4];
+            if memory.read(&caller, view_name_ptr as usize, &mut view_name_len_bytes).is_err() {
+                log::error!("Failed to read view name length");
+                return -1;
+            }
+            let view_name_len = u32::from_le_bytes(view_name_len_bytes) as usize;
+            
+            let mut view_name_bytes = vec![0u8; view_name_len];
+            if memory.read(&caller, (view_name_ptr + 4) as usize, &mut view_name_bytes).is_err() {
+                log::error!("Failed to read view name");
+                return -1;
+            }
+            
+            let view_name = match std::str::from_utf8(&view_name_bytes) {
+                Ok(name) => name,
+                Err(e) => {
+                    log::error!("Failed to decode view name: {}", e);
+                    return -1;
+                }
+            };
+            
+            // Read the input data
+            let mut input_len_bytes = [0u8; 4];
+            if memory.read(&caller, input_ptr as usize, &mut input_len_bytes).is_err() {
+                log::error!("Failed to read input length");
+                return -1;
+            }
+            let input_len = u32::from_le_bytes(input_len_bytes) as usize;
+            
+            let mut input_bytes = vec![0u8; input_len];
+            if memory.read(&caller, (input_ptr + 4) as usize, &mut input_bytes).is_err() {
+                log::error!("Failed to read input data");
+                return -1;
+            }
+            
+            // Call the view function
+            log::debug!("Calling view function '{}' with {} bytes of input", view_name, input_len);
+            
+            // Use the client to call the view function
+            let client = client_clone.clone();
+            
+            // We can't create a new runtime here, so we'll use a blocking call
+            // This is not ideal, but it's a workaround for now
+            let result = match tokio::task::block_in_place(|| {
+                let _rt = tokio::runtime::Handle::current();
+                futures::executor::block_on(async {
+                    client.call_view(view_name, &input_bytes, Some(current_height)).await
+                })
+            }) {
+                Ok(r) => Ok(r),
+                Err(e) => Err(e),
+            };
+            
+            match result {
+                Ok(data) => {
+                    log::debug!("View call '{}' succeeded, result length: {}", view_name, data.len());
+                    
+                    // Store the result in a global buffer that can be accessed by __load
+                    // For simplicity, we'll use a static buffer
+                    unsafe {
+                        VIEW_RESULT_BUFFER = data;
+                        return VIEW_RESULT_BUFFER.len() as i32;
+                    }
+                },
+                Err(e) => {
+                    log::error!("View call '{}' failed: {}", view_name, e);
+                    return -1;
+                }
+            }
         }).map_err(|e| anyhow!("Failed to register __view: {}", e))?;
         
         linker.func_wrap(env_module, "__stdout", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
@@ -345,13 +460,122 @@ impl WasmRuntime {
         let current_hash_for_block_hash = self.current_hash.clone();
         
         // Register all required host functions
-        linker.func_wrap(env_module, "__load", |_ptr: i32| {
-            // Simple stub implementation
+        linker.func_wrap(env_module, "__load", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+            // Get the memory export
+            let memory = match caller.get_export("memory") {
+                Some(wasmtime::Extern::Memory(mem)) => mem,
+                _ => {
+                    log::error!("No memory export found in WASM module");
+                    return;
+                }
+            };
+            
+            // Write the view result to WASM memory
+            unsafe {
+                if VIEW_RESULT_BUFFER.is_empty() {
+                    log::warn!("View result buffer is empty");
+                    return;
+                }
+                
+                // Write the length first (4 bytes)
+                let len_bytes = (VIEW_RESULT_BUFFER.len() as u32).to_le_bytes();
+                if memory.write(&mut caller, ptr as usize, &len_bytes).is_err() {
+                    log::error!("Failed to write view result length");
+                    return;
+                }
+                
+                // Then write the data
+                if memory.write(&mut caller, (ptr + 4) as usize, &VIEW_RESULT_BUFFER).is_err() {
+                    log::error!("Failed to write view result data");
+                    return;
+                }
+                
+                log::debug!("Wrote {} bytes of view result to WASM memory", VIEW_RESULT_BUFFER.len());
+            }
         }).map_err(|e| anyhow!("Failed to register __load: {}", e))?;
         
-        linker.func_wrap(env_module, "__view", |_view_name_ptr: i32, _input_ptr: i32| -> i32 {
-            // Simple stub implementation - return 0 for success
-            0
+        // Create a reference to the client for the view function
+        let client_clone = Arc::new(crate::client::JsonRpcClient::new("http://localhost:18888").unwrap());
+        
+        linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, ()>, view_name_ptr: i32, input_ptr: i32| -> i32 {
+            // Get the memory export
+            let memory = match caller.get_export("memory") {
+                Some(wasmtime::Extern::Memory(mem)) => mem,
+                _ => {
+                    log::error!("No memory export found in WASM module");
+                    return -1;
+                }
+            };
+            
+            // Read the view name
+            let mut view_name_len_bytes = [0u8; 4];
+            if memory.read(&caller, view_name_ptr as usize, &mut view_name_len_bytes).is_err() {
+                log::error!("Failed to read view name length");
+                return -1;
+            }
+            let view_name_len = u32::from_le_bytes(view_name_len_bytes) as usize;
+            
+            let mut view_name_bytes = vec![0u8; view_name_len];
+            if memory.read(&caller, (view_name_ptr + 4) as usize, &mut view_name_bytes).is_err() {
+                log::error!("Failed to read view name");
+                return -1;
+            }
+            
+            let view_name = match std::str::from_utf8(&view_name_bytes) {
+                Ok(name) => name,
+                Err(e) => {
+                    log::error!("Failed to decode view name: {}", e);
+                    return -1;
+                }
+            };
+            
+            // Read the input data
+            let mut input_len_bytes = [0u8; 4];
+            if memory.read(&caller, input_ptr as usize, &mut input_len_bytes).is_err() {
+                log::error!("Failed to read input length");
+                return -1;
+            }
+            let input_len = u32::from_le_bytes(input_len_bytes) as usize;
+            
+            let mut input_bytes = vec![0u8; input_len];
+            if memory.read(&caller, (input_ptr + 4) as usize, &mut input_bytes).is_err() {
+                log::error!("Failed to read input data");
+                return -1;
+            }
+            
+            // Call the view function
+            log::debug!("Calling view function '{}' with {} bytes of input", view_name, input_len);
+            
+            // Use the client to call the view function
+            let client = client_clone.clone();
+            
+            // We can't create a new runtime here, so we'll use a blocking call
+            // This is not ideal, but it's a workaround for now
+            let result = match tokio::task::block_in_place(|| {
+                let _rt = tokio::runtime::Handle::current();
+                futures::executor::block_on(async {
+                    client.call_view(view_name, &input_bytes, Some(current_height)).await
+                })
+            }) {
+                Ok(r) => Ok(r),
+                Err(e) => Err(e),
+            };
+            
+            match result {
+                Ok(data) => {
+                    log::debug!("View call '{}' succeeded, result length: {}", view_name, data.len());
+                    
+                    // Store the result in a global buffer that can be accessed by __load
+                    unsafe {
+                        VIEW_RESULT_BUFFER = data;
+                        return VIEW_RESULT_BUFFER.len() as i32;
+                    }
+                },
+                Err(e) => {
+                    log::error!("View call '{}' failed: {}", view_name, e);
+                    return -1;
+                }
+            }
         }).map_err(|e| anyhow!("Failed to register __view: {}", e))?;
         
         linker.func_wrap(env_module, "__stdout", |_ptr: i32| {

@@ -518,7 +518,7 @@ impl MetashrewClient for JsonRpcClient {
         // The metashrew_view method expects an array of strings
         // Let's try using a JSON array directly to ensure proper formatting
         let view_params = match height {
-            Some(h) => serde_json::json!([view_name, params_hex, h.to_string()]),
+            Some(h) => serde_json::json!([view_name, params_hex, h]),
             None => serde_json::json!([view_name, params_hex, "latest"]),
         };
         
