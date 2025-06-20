@@ -593,8 +593,44 @@ impl MockMetashrewClient {
             height: 0,
             block_hashes: Vec::new(),
             view_results: Vec::new(),
-            url: Url::parse("http://localhost:18888").unwrap(),
+            url: Url::parse("http://localhost:18888").unwrap(), // Default URL
         }
+    }
+    
+    /// Create a new mock metashrew client with a specific URL
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The metashrew URL
+    ///
+    /// # Returns
+    ///
+    /// A new mock metashrew client
+    pub fn with_url(url: &str) -> Result<Self> {
+        let parsed_url = Url::parse(url)
+            .map_err(|e| Error::MetashrewClient(format!("Invalid URL: {}", e)))?;
+            
+        Ok(Self {
+            height: 0,
+            block_hashes: Vec::new(),
+            view_results: Vec::new(),
+            url: parsed_url,
+        })
+    }
+    
+    /// Set the metashrew URL
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The metashrew URL
+    ///
+    /// # Returns
+    ///
+    /// Result indicating success or failure
+    pub fn set_url(&mut self, url: &str) -> Result<()> {
+        self.url = Url::parse(url)
+            .map_err(|e| Error::MetashrewClient(format!("Invalid URL: {}", e)))?;
+        Ok(())
     }
     
     /// Set the current block height

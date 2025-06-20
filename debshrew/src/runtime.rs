@@ -37,6 +37,9 @@ pub struct WasmRuntime {
     
     /// Cache of CDC messages by block height
     cdc_cache: HashMap<u32, Vec<CdcMessage>>,
+    
+    /// The metashrew URL
+    metashrew_url: String,
 }
 
 impl std::fmt::Debug for WasmRuntime {
@@ -64,7 +67,7 @@ impl WasmRuntime {
     /// # Errors
     ///
     /// Returns an error if the WASM module cannot be loaded
-    pub fn new<P: AsRef<Path>>(wasm_path: P) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(wasm_path: P, metashrew_url: &str) -> Result<Self> {
         let engine = Engine::default();
         let module = Module::from_file(&engine, wasm_path)
             .map_err(|e| anyhow!("Failed to load WASM module: {}", e))?;
@@ -76,6 +79,7 @@ impl WasmRuntime {
             current_hash: Vec::new(),
             state: TransformState::new(),
             cdc_cache: HashMap::new(),
+            metashrew_url: metashrew_url.to_string(),
         })
     }
 
@@ -92,7 +96,7 @@ impl WasmRuntime {
     /// # Errors
     ///
     /// Returns an error if the WASM module cannot be loaded
-    pub fn from_bytes(wasm_bytes: &[u8]) -> Result<Self> {
+    pub fn from_bytes(wasm_bytes: &[u8], metashrew_url: &str) -> Result<Self> {
         let engine = Engine::default();
         let module = Module::from_binary(&engine, wasm_bytes)
             .map_err(|e| anyhow!("Failed to load WASM module from bytes: {}", e))?;
@@ -104,7 +108,17 @@ impl WasmRuntime {
             current_hash: Vec::new(),
             state: TransformState::new(),
             cdc_cache: HashMap::new(),
+            metashrew_url: metashrew_url.to_string(),
         })
+    }
+    
+    /// Get the metashrew URL
+    ///
+    /// # Returns
+    ///
+    /// The metashrew URL
+    pub fn get_metashrew_url(&self) -> &str {
+        &self.metashrew_url
     }
 
     /// Set the current block height
@@ -210,8 +224,15 @@ impl WasmRuntime {
             }
         }).map_err(|e| anyhow!("Failed to register __load: {}", e))?;
         
-        // Create a reference to the client for the view function
-        let client_clone = Arc::new(crate::client::JsonRpcClient::new("http://localhost:18888").unwrap());
+        // Use the client passed to the runtime instead of creating a new one with hardcoded URL
+        let client_clone = Arc::new(crate::client::JsonRpcClient::from_config(&crate::config::MetashrewConfig {
+            url: self.get_metashrew_url().to_string(),
+            username: None,
+            password: None,
+            timeout: 30,
+            max_retries: 3,
+            retry_delay: 1000,
+        }).unwrap());
         
         linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, ()>, view_name_ptr: i32, input_ptr: i32| -> i32 {
             // Get the memory export
@@ -494,8 +515,15 @@ impl WasmRuntime {
             }
         }).map_err(|e| anyhow!("Failed to register __load: {}", e))?;
         
-        // Create a reference to the client for the view function
-        let client_clone = Arc::new(crate::client::JsonRpcClient::new("http://localhost:18888").unwrap());
+        // Use the client passed to the runtime instead of creating a new one with hardcoded URL
+        let client_clone = Arc::new(crate::client::JsonRpcClient::from_config(&crate::config::MetashrewConfig {
+            url: self.get_metashrew_url().to_string(),
+            username: None,
+            password: None,
+            timeout: 30,
+            max_retries: 3,
+            retry_delay: 1000,
+        }).unwrap());
         
         linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, ()>, view_name_ptr: i32, input_ptr: i32| -> i32 {
             // Get the memory export
@@ -793,7 +821,7 @@ impl WasmRuntime {
         )
         .map_err(|e| anyhow!("Failed to create test WASM module: {}", e))?;
         
-        Self::from_bytes(&wasm_bytes)
+        Self::from_bytes(&wasm_bytes, "http://localhost:18888")
     }
 }
 

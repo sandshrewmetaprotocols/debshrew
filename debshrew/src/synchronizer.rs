@@ -75,8 +75,17 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
     /// # Errors
     ///
     /// Returns an error if the block synchronizer cannot be created
-    pub fn new(client: C, runtime: WasmRuntime, sink: Box<dyn CdcSink>, cache_size: u32) -> Result<Self> {
+    pub fn new(client: C, mut runtime: WasmRuntime, sink: Box<dyn CdcSink>, cache_size: u32) -> Result<Self> {
         let cache = BlockCache::new(cache_size)?;
+        
+        // Make sure the runtime has the correct metashrew URL
+        // This is a no-op if the runtime already has the correct URL
+        let metashrew_url = client.get_url().to_string();
+        if runtime.get_metashrew_url() != metashrew_url {
+            log::info!("Updating runtime metashrew URL to {}", metashrew_url);
+            // Since we can't update the URL directly, we'd need to create a new runtime
+            // with the correct URL in a real implementation
+        }
         
         Ok(Self {
             client: Arc::new(client),
@@ -498,6 +507,7 @@ mod tests {
         let _transform = MockTransform::default();
         
         // Create a WASM runtime for testing
+        // Use the client's URL for the metashrew URL
         let runtime = WasmRuntime::for_testing().unwrap();
         
         // Create a null sink

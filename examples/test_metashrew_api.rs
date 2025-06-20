@@ -1,14 +1,22 @@
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::error::Error;
+use std::env;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Create a new HTTP client
     let client = Client::new();
     
-    // Metashrew URL
-    let url = "http://localhost:18888";
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
+    
+    // Metashrew URL - use command line arg if provided, otherwise default
+    let url = if args.len() > 1 {
+        args[1].clone()
+    } else {
+        "http://localhost:18888".to_string()
+    };
     
     println!("Testing Metashrew API at {}", url);
     

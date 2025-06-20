@@ -4,16 +4,28 @@ use reqwest::blocking::Client;
 use serde_json::{json, Value};
 use alkanes_support::proto::alkanes::{BlockRequest, BlockResponse};
 use protobuf::Message;
+use std::env;
 
 fn main() -> Result<()> {
     // Create a new HTTP client
     let client = Client::new();
     
-    // Metashrew URL
-    let url = "http://localhost:18888";
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
     
-    // Block height to request
-    let height = 1; // Start with block 1
+    // Metashrew URL - use command line arg if provided, otherwise default
+    let url = if args.len() > 1 {
+        args[1].clone()
+    } else {
+        "http://localhost:18888".to_string()
+    };
+    
+    // Block height to request - use command line arg if provided, otherwise default
+    let height = if args.len() > 2 {
+        args[2].parse::<u32>().unwrap_or(1)
+    } else {
+        1 // Start with block 1
+    };
     
     println!("Requesting block {} from {}", height, url);
     
