@@ -75,7 +75,7 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
     /// # Errors
     ///
     /// Returns an error if the block synchronizer cannot be created
-    pub fn new(client: C, mut runtime: WasmRuntime, sink: Box<dyn CdcSink>, cache_size: u32) -> Result<Self> {
+    pub fn new(client: C, runtime: WasmRuntime, sink: Box<dyn CdcSink>, cache_size: u32) -> Result<Self> {
         let cache = BlockCache::new(cache_size)?;
         
         // Make sure the runtime has the correct metashrew URL

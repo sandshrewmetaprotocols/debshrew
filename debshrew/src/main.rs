@@ -201,7 +201,7 @@ async fn main() -> Result<()> {
             
             // Load transform module
             info!("Loading transform module from {}", config.transform.path);
-            let runtime = WasmRuntime::new(&config.transform.path)?;
+            let runtime = WasmRuntime::new(&config.transform.path, &config.metashrew.url)?;
             
             // Create CDC sink
             info!("Creating CDC sink");
