@@ -501,7 +501,7 @@ mod tests {
     use super::*;
     use crate::client::MockMetashrewClient;
     use crate::sink::{ConsoleSink, FileSink, NullSink};
-    use debshrew_runtime::MockTransform;
+    use debshrew_runtime::transform::MockTransform;
     use debshrew_support::{CdcHeader, CdcMessage, CdcOperation, CdcPayload};
     use std::sync::Arc;
     use tempfile::tempdir;

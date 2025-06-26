@@ -15,8 +15,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use debshrew::{BlockSynchronizer, MetashrewClient, JsonRpcClient, create_sink, SinkConfig};
-//! use debshrew_runtime::WasmRuntime;
+//! use debshrew::{BlockSynchronizer, MetashrewClient, JsonRpcClient, create_sink, SinkConfig, WasmRuntime};
 //! use std::path::Path;
 //!
 //! #[tokio::main]
@@ -25,7 +24,7 @@
 //!     let client = JsonRpcClient::new("http://localhost:8080")?;
 //!
 //!     // Load the transform module
-//!     let runtime = WasmRuntime::new(Path::new("transform.wasm"))?;
+//!     let runtime = WasmRuntime::new(Path::new("transform.wasm"), "http://localhost:8080")?;
 //!
 //!     // Create a CDC sink
 //!     let sink_config = SinkConfig::Kafka {
@@ -50,6 +49,7 @@
 #![warn(missing_docs)]
 #![warn(rustdoc::missing_doc_code_examples)]
 
+pub mod adapters;
 pub mod block;
 pub mod client;
 pub mod config;
@@ -57,13 +57,18 @@ pub mod error;
 pub mod runtime;
 pub mod sink;
 pub mod synchronizer;
+pub mod traits;
+
+#[cfg(test)]
+pub mod tests;
 
 /// Re-export common types and functions for convenience
 pub use block::BlockCache;
 pub use client::*;
 pub use config::*;
 pub use runtime::WasmRuntime;
-pub use debshrew_support;
+pub use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload, TransformState};
 pub use error::{Error, Result};
 pub use sink::{CdcSink, create_sink, ConsoleSink, FileSink, KafkaSink, NullSink, PostgresSink};
 pub use synchronizer::{BlockSynchronizer, Synchronizer};
+pub use traits::*;

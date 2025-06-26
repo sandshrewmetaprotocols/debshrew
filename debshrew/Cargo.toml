@@ -23,6 +23,7 @@ tokio.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 wasmtime.workspace = true
+wat.workspace = true
 bincode.workspace = true
 hex.workspace = true
 rdkafka.workspace = true

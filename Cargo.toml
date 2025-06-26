@@ -4,6 +4,7 @@ members = [
     "debshrew-runtime",
     "debshrew-support",
     "debshrew-test-consumer",
+    "debshrew-minimal",
     "examples/*"
 ]
 resolver = "2"

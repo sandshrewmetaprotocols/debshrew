@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // Test 1: Get height
     println!("\n=== Testing metashrew_height ===");
-    let height_response = client.post(url)
+    let height_response = client.post(&url)
         .header("Content-Type", "application/json")
         .body(json!({
             "jsonrpc": "2.0",
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // Test 2: Get block hash for height 2 (should fail if there's only 1 block)
     println!("\n=== Testing metashrew_getblockhash for height 2 ===");
-    let blockhash_response = client.post(url)
+    let blockhash_response = client.post(&url)
         .header("Content-Type", "application/json")
         .body(json!({
             "jsonrpc": "2.0",
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // Test 3: Try with bitcoin-style method
     println!("\n=== Testing getblockhash for height 2 (bitcoin-style) ===");
-    let bitcoin_blockhash_response = client.post(url)
+    let bitcoin_blockhash_response = client.post(&url)
         .header("Content-Type", "application/json")
         .body(json!({
             "jsonrpc": "2.0",
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("\n=== Testing getblock for height 1 ===");
     
     // First get the hash
-    let hash_response = client.post(url)
+    let hash_response = client.post(&url)
         .header("Content-Type", "application/json")
         .body(json!({
             "jsonrpc": "2.0",
@@ -102,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let hash = hash_json.get("result").and_then(|v| v.as_str()).unwrap_or("");
     
     // Then get the block info
-    let block_response = client.post(url)
+    let block_response = client.post(&url)
         .header("Content-Type", "application/json")
         .body(json!({
             "jsonrpc": "2.0",
@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // Test 5: Check if we can get blockchain info
     println!("\n=== Testing getblockchaininfo ===");
-    let info_response = client.post(url)
+    let info_response = client.post(&url)
         .header("Content-Type", "application/json")
         .body(json!({
             "jsonrpc": "2.0",
@@ -134,7 +134,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // Test 6: Check if we can get the actual block count
     println!("\n=== Testing getblockcount ===");
-    let count_response = client.post(url)
+    let count_response = client.post(&url)
         .header("Content-Type", "application/json")
         .body(json!({
             "jsonrpc": "2.0",

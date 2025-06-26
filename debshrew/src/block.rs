@@ -321,13 +321,13 @@ mod tests {
         let metadata = BlockMetadata {
             height,
             hash: hash.to_string(),
-            timestamp: Utc::now(),
+            timestamp: Utc::now().timestamp_millis() as u64,
         };
         
         let cdc_message = CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: Utc::now().timestamp_millis() as u64,
                 block_height: height,
                 block_hash: hash.to_string(),
                 transaction_id: None,

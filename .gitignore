@@ -1,5 +1,7 @@
+reference
 # Rust
 target/
+# Cargo.lock is ignored for library crates (should be committed for applications)
 Cargo.lock
 **/*.rs.bk
 
@@ -50,8 +52,11 @@ config.local.*
 *.pid
 *.seed
 
-# WASM artifacts
-*.wasm
+# WASM artifacts (but allow target/ to be ignored by Rust section)
+# Only ignore WASM files in root or specific directories, not in target/
+/*.wasm
+/examples/*.wasm
+/tests/*.wasm
 
 # Documentation build
 /docs/_build/
@@ -67,3 +72,28 @@ perf.data*
 # Coverage reports
 tarpaulin-report.html
 lcov.info
+
+# Test artifacts specific to debshrew
+/test_output/
+/test_data/
+*.test.json
+*.test.log
+
+# Build script artifacts
+/build_artifacts/
+
+# Runtime test files
+/runtime_test_*
+/wasm_test_*
+
+# Temporary test WASM modules (if any are created outside target/)
+test_*.wasm
+minimal_*.wasm
+
+# IDE and editor specific files for Rust projects
+.cargo/
+rust-project.json
+
+# Flamegraph profiling
+flamegraph.svg
+perf.data

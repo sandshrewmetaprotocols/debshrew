@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load the sample transform WASM module
     let wasm_path = Path::new("./target/wasm32-unknown-unknown/release/sample_transform.wasm");
     println!("Loading WASM module from {:?}", wasm_path);
-    let mut runtime = WasmRuntime::new(wasm_path)?;
+    let mut runtime = WasmRuntime::new(wasm_path, "http://localhost:8080")?;
     
     // Register a mock "getblock" view function
     println!("Registering mock getblock view function");

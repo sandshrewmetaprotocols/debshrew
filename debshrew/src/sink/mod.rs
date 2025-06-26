@@ -651,7 +651,7 @@ mod tests {
         CdcMessage {
             header: CdcHeader {
                 source: "test".to_string(),
-                timestamp: Utc::now(),
+                timestamp: Utc::now().timestamp_millis() as u64,
                 block_height: 123,
                 block_hash: "000000000000000000024bead8df69990852c202db0e0097c1a12ea637d7e96d".to_string(),
                 transaction_id: None,

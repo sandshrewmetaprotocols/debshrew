@@ -462,39 +462,59 @@ impl WasmRuntime {
         let cdc_ptr = process_block.call(&mut store, ())
             .map_err(|e| anyhow!("Failed to call process_block function: {}", e))?;
         
+        log::debug!("WASM process_block returned pointer: {}", cdc_ptr);
+        
         if cdc_ptr < 0 {
             return Err(anyhow!("Process block failed with code {}", cdc_ptr).into());
         }
         
-        // In a real implementation, we would deserialize the CDC messages from WASM memory
-        // using the pointer returned by the process_block function
-        // For now, we'll just create a simple CDC message
-        let cdc_messages = vec![CdcMessage {
-            header: CdcHeader {
-                source: "block_transform".to_string(),
-                timestamp: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                block_height: current_height,
-                block_hash: hex::encode(&self.current_hash),
-                transaction_id: None,
-            },
-            payload: CdcPayload {
-                operation: CdcOperation::Create,
-                table: "blocks".to_string(),
-                key: current_height.to_string(),
-                before: None,
-                after: Some(serde_json::json!({
-                    "height": current_height,
-                    "hash": hex::encode(&self.current_hash),
-                    "timestamp": SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                })),
-            },
-        }];
+        // Deserialize the CDC messages from WASM memory using the pointer returned by the process_block function
+        let cdc_messages = if cdc_ptr == 0 {
+            log::debug!("WASM returned null pointer, using empty CDC messages");
+            // If pointer is 0, return empty messages
+            Vec::new()
+        } else {
+            // Get the memory export
+            let memory = instance.get_memory(&mut store, "memory")
+                .ok_or_else(|| anyhow!("No memory export found in WASM module"))?;
+            
+            // Read the length (first 4 bytes at the pointer)
+            let mut len_bytes = [0u8; 4];
+            memory.read(&store, cdc_ptr as usize, &mut len_bytes)
+                .map_err(|e| anyhow!("Failed to read CDC message length: {}", e))?;
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            log::debug!("WASM CDC message length: {}", len);
+            
+            if len == 0 {
+                log::debug!("WASM CDC message length is 0, using empty messages");
+                Vec::new()
+            } else if len > 10_000_000 {
+                log::error!("WASM CDC message length too large: {}, ignoring", len);
+                Vec::new()
+            } else {
+                // Read the serialized CDC messages
+                let mut serialized_data = vec![0u8; len];
+                memory.read(&store, (cdc_ptr + 4) as usize, &mut serialized_data)
+                    .map_err(|e| anyhow!("Failed to read CDC message data: {}", e))?;
+                
+                log::debug!("Read {} bytes of CDC message data from WASM", serialized_data.len());
+                log::debug!("First 100 bytes: {:?}", &serialized_data[..std::cmp::min(100, serialized_data.len())]);
+                
+                // Deserialize the CDC messages
+                match serde_json::from_slice::<Vec<CdcMessage>>(&serialized_data) {
+                    Ok(messages) => {
+                        log::info!("Successfully deserialized {} CDC messages from WASM", messages.len());
+                        messages
+                    },
+                    Err(e) => {
+                        log::error!("Failed to deserialize CDC messages from WASM: {}", e);
+                        log::error!("Raw data as string: {}", String::from_utf8_lossy(&serialized_data));
+                        return Err(anyhow!("Failed to deserialize CDC messages: {}", e).into());
+                    }
+                }
+            }
+        };
         
         // Cache CDC messages for this block
         self.cdc_cache.insert(height, cdc_messages.clone());
@@ -710,35 +730,34 @@ impl WasmRuntime {
             return Err(anyhow!("Rollback failed with code {}", cdc_ptr).into());
         }
         
-        // In a real implementation, we would deserialize the CDC messages from WASM memory
-        // using the pointer returned by the rollback function
-        // For now, we'll just create a simple CDC message
-        let cdc_messages = vec![CdcMessage {
-            header: CdcHeader {
-                source: "block_transform".to_string(),
-                timestamp: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                block_height: current_height,
-                block_hash: hex::encode(&self.current_hash),
-                transaction_id: None,
-            },
-            payload: CdcPayload {
-                operation: CdcOperation::Delete,
-                table: "blocks".to_string(),
-                key: current_height.to_string(),
-                before: Some(serde_json::json!({
-                    "height": current_height,
-                    "hash": hex::encode(&self.current_hash),
-                    "timestamp": SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs()
-                })),
-                after: None,
-            },
-        }];
+        // Deserialize the CDC messages from WASM memory using the pointer returned by the rollback function
+        let cdc_messages = if cdc_ptr == 0 {
+            // If pointer is 0, return empty messages
+            Vec::new()
+        } else {
+            // Get the memory export
+            let memory = instance.get_memory(&mut store, "memory")
+                .ok_or_else(|| anyhow!("No memory export found in WASM module"))?;
+            
+            // Read the length (first 4 bytes at the pointer)
+            let mut len_bytes = [0u8; 4];
+            memory.read(&store, cdc_ptr as usize, &mut len_bytes)
+                .map_err(|e| anyhow!("Failed to read CDC message length: {}", e))?;
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            
+            if len == 0 {
+                Vec::new()
+            } else {
+                // Read the serialized CDC messages
+                let mut serialized_data = vec![0u8; len];
+                memory.read(&store, (cdc_ptr + 4) as usize, &mut serialized_data)
+                    .map_err(|e| anyhow!("Failed to read CDC message data: {}", e))?;
+                
+                // Deserialize the CDC messages
+                serde_json::from_slice::<Vec<CdcMessage>>(&serialized_data)
+                    .map_err(|e| anyhow!("Failed to deserialize CDC messages: {}", e))?
+            }
+        };
         
         // Update state from WASM memory
         // In a real implementation, we would extract the state from WASM memory

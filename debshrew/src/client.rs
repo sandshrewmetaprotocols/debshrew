@@ -4,6 +4,7 @@
 
 use crate::error::{Error, Result};
 use crate::config::MetashrewConfig;
+use crate::traits::{BlockProviderLike, ViewProviderLike, MetashrewClientLike};
 use async_trait::async_trait;
 use log;
 use reqwest::{Client, ClientBuilder};
@@ -586,6 +587,36 @@ impl MetashrewClient for JsonRpcClient {
     }
 }
 
+#[async_trait]
+impl BlockProviderLike for JsonRpcClient {
+    async fn get_height(&self) -> Result<u32> {
+        <Self as MetashrewClient>::get_height(self).await
+    }
+    
+    async fn get_block_hash(&self, height: u32) -> Result<Vec<u8>> {
+        <Self as MetashrewClient>::get_block_hash(self, height).await
+    }
+}
+
+#[async_trait]
+impl ViewProviderLike for JsonRpcClient {
+    async fn call_view(&self, view_name: &str, params: &[u8], height: Option<u32>) -> Result<Vec<u8>> {
+        <Self as MetashrewClient>::call_view(self, view_name, params, height).await
+    }
+}
+
+#[async_trait]
+impl MetashrewClientLike for JsonRpcClient {
+    fn get_identifier(&self) -> String {
+        self.url.to_string()
+    }
+    
+    async fn is_healthy(&self) -> bool {
+        // Try to get the current height as a health check
+        <Self as MetashrewClient>::get_height(self).await.is_ok()
+    }
+}
+
 /// Mock metashrew client for testing
 #[derive(Debug, Clone)]
 pub struct MockMetashrewClient {
@@ -747,6 +778,35 @@ impl MetashrewClient for MockMetashrewClient {
     }
 }
 
+#[async_trait]
+impl BlockProviderLike for MockMetashrewClient {
+    async fn get_height(&self) -> Result<u32> {
+        <Self as MetashrewClient>::get_height(self).await
+    }
+    
+    async fn get_block_hash(&self, height: u32) -> Result<Vec<u8>> {
+        <Self as MetashrewClient>::get_block_hash(self, height).await
+    }
+}
+
+#[async_trait]
+impl ViewProviderLike for MockMetashrewClient {
+    async fn call_view(&self, view_name: &str, params: &[u8], height: Option<u32>) -> Result<Vec<u8>> {
+        <Self as MetashrewClient>::call_view(self, view_name, params, height).await
+    }
+}
+
+#[async_trait]
+impl MetashrewClientLike for MockMetashrewClient {
+    fn get_identifier(&self) -> String {
+        format!("mock-{}", self.url)
+    }
+    
+    async fn is_healthy(&self) -> bool {
+        true // Mock client is always healthy
+    }
+}
+
 impl Default for MockMetashrewClient {
     fn default() -> Self {
         Self::new()
@@ -774,20 +834,20 @@ mod tests {
         let rt = Runtime::new().unwrap();
         
         // Test get_height
-        let height = rt.block_on(client.get_height()).unwrap();
+        let height = rt.block_on(<MockMetashrewClient as MetashrewClient>::get_height(&client)).unwrap();
         assert_eq!(height, 123);
         
         // Test get_block_hash
-        let hash = rt.block_on(client.get_block_hash(123)).unwrap();
+        let hash = rt.block_on(<MockMetashrewClient as MetashrewClient>::get_block_hash(&client, 123)).unwrap();
         assert_eq!(hash, vec![1, 2, 3]);
         
         // Test call_view
-        let result = rt.block_on(client.call_view("test_view", &[4, 5, 6], None)).unwrap();
+        let result = rt.block_on(<MockMetashrewClient as MetashrewClient>::call_view(&client, "test_view", &[4, 5, 6], None)).unwrap();
         assert_eq!(result, vec![7, 8, 9]);
         
         // Test error cases
-        assert!(rt.block_on(client.get_block_hash(456)).is_err());
-        assert!(rt.block_on(client.call_view("nonexistent", &[], None)).is_err());
+        assert!(rt.block_on(<MockMetashrewClient as MetashrewClient>::get_block_hash(&client, 456)).is_err());
+        assert!(rt.block_on(<MockMetashrewClient as MetashrewClient>::call_view(&client, "nonexistent", &[], None)).is_err());
     }
 
     #[tokio::test]
@@ -801,7 +861,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200)
                 .set_body_json(json!({
                     "jsonrpc": "2.0",
-                    "result": 123,
+                    "result": "123",
                     "id": 0
                 })))
             .mount(&mock_server)
@@ -811,7 +871,7 @@ mod tests {
         let client = JsonRpcClient::new(&mock_server.uri()).unwrap();
         
         // Test get_height
-        let height = client.get_height().await.unwrap();
+        let height = <JsonRpcClient as MetashrewClient>::get_height(&client).await.unwrap();
         assert_eq!(height, 123);
     }
 }
