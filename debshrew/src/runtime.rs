@@ -11,12 +11,50 @@ use debshrew_support::{CdcMessage, CdcHeader, CdcOperation, CdcPayload, Transfor
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use wasmtime::{Engine, Module, Store, Linker};
+use wasmtime::{Engine, Module, Store, Linker, Config, StoreLimitsBuilder, ResourceLimiter, StoreLimits};
 use anyhow::anyhow;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// Static buffer to store view function results
-static mut VIEW_RESULT_BUFFER: Vec<u8> = Vec::new();
+// We no longer use a global buffer - view results are stored in the caller's state
+
+/// Custom resource limiter for large memory allocation
+struct LargeMemoryLimiter {
+    limits: StoreLimits,
+}
+
+impl LargeMemoryLimiter {
+    fn new() -> Self {
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(4 * 1024 * 1024 * 1024) // 4GB
+            .build();
+        Self { limits }
+    }
+}
+
+impl ResourceLimiter for LargeMemoryLimiter {
+    fn memory_growing(&mut self, _current: usize, _desired: usize, _maximum: Option<usize>) -> anyhow::Result<bool> {
+        Ok(true) // Allow memory growth up to our limits
+    }
+
+    fn table_growing(&mut self, _current: u32, _desired: u32, _maximum: Option<u32>) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+}
+
+/// State that will be stored in the wasmtime Store
+#[derive(Debug, Clone)]
+pub struct RuntimeState {
+    /// The current view result buffer
+    pub view_result: Vec<u8>,
+}
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self {
+            view_result: Vec::new(),
+        }
+    }
+}
 
 /// WASM runtime for executing transform modules
 pub struct WasmRuntime {
@@ -54,6 +92,29 @@ impl std::fmt::Debug for WasmRuntime {
 }
 
 impl WasmRuntime {
+    /// Create a wasmtime engine with proper configuration for large memory allocation
+    /// and deterministic execution, similar to metashrew-runtime
+    fn create_engine() -> Result<Engine> {
+        let mut config = Config::new();
+        
+        // Enable deterministic execution
+        config.cranelift_nan_canonicalization(true);
+        config.cranelift_opt_level(wasmtime::OptLevel::Speed);
+        config.consume_fuel(false);
+        config.epoch_interruption(false);
+        
+        // Configure memory limits - 4GB max memory like metashrew
+        config.max_wasm_stack(1024 * 1024); // 1MB stack
+        config.wasm_memory64(false);
+        config.wasm_multi_memory(false);
+        config.wasm_bulk_memory(true);
+        config.wasm_reference_types(true);
+        config.wasm_simd(true);
+        
+        // Create engine with the configuration
+        Engine::new(&config).map_err(|e| anyhow!("Failed to create wasmtime engine: {}", e).into())
+    }
+
     /// Create a new WASM runtime
     ///
     /// # Arguments
@@ -68,7 +129,7 @@ impl WasmRuntime {
     ///
     /// Returns an error if the WASM module cannot be loaded
     pub fn new<P: AsRef<Path>>(wasm_path: P, metashrew_url: &str) -> Result<Self> {
-        let engine = Engine::default();
+        let engine = Self::create_engine()?;
         let module = Module::from_file(&engine, wasm_path)
             .map_err(|e| anyhow!("Failed to load WASM module: {}", e))?;
 
@@ -97,7 +158,7 @@ impl WasmRuntime {
     ///
     /// Returns an error if the WASM module cannot be loaded
     pub fn from_bytes(wasm_bytes: &[u8], metashrew_url: &str) -> Result<Self> {
-        let engine = Engine::default();
+        let engine = Self::create_engine()?;
         let module = Module::from_binary(&engine, wasm_bytes)
             .map_err(|e| anyhow!("Failed to load WASM module from bytes: {}", e))?;
 
@@ -176,8 +237,8 @@ impl WasmRuntime {
         self.set_current_height(height);
         self.set_current_hash(hash);
         
-        // Create a new store with our runtime data
-        let mut store = Store::new(&self.engine, ());
+        // Create a new store with our runtime state
+        let mut store = Store::new(&self.engine, RuntimeState::default());
         
         // Define host functions that will be imported by the WASM module
         let mut linker = Linker::new(&self.engine);
@@ -190,7 +251,7 @@ impl WasmRuntime {
         let current_hash_for_block_hash = self.current_hash.clone();
         
         // Register all required host functions
-        linker.func_wrap(env_module, "__load", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+        linker.func_wrap(env_module, "__load", |mut caller: wasmtime::Caller<'_, RuntimeState>, ptr: i32| {
             // Get the memory export
             let memory = match caller.get_export("memory") {
                 Some(wasmtime::Extern::Memory(mem)) => mem,
@@ -200,28 +261,26 @@ impl WasmRuntime {
                 }
             };
             
-            // Write the view result to WASM memory
-            unsafe {
-                if VIEW_RESULT_BUFFER.is_empty() {
-                    log::warn!("View result buffer is empty");
-                    return;
-                }
-                
-                // Write the length first (4 bytes)
-                let len_bytes = (VIEW_RESULT_BUFFER.len() as u32).to_le_bytes();
-                if memory.write(&mut caller, ptr as usize, &len_bytes).is_err() {
-                    log::error!("Failed to write view result length");
-                    return;
-                }
-                
-                // Then write the data
-                if memory.write(&mut caller, (ptr + 4) as usize, &VIEW_RESULT_BUFFER).is_err() {
-                    log::error!("Failed to write view result data");
-                    return;
-                }
-                
-                log::debug!("Wrote {} bytes of view result to WASM memory", VIEW_RESULT_BUFFER.len());
+            // Get the view result from caller's state
+            let view_result = {
+                let state = caller.data();
+                state.view_result.clone()
+            };
+            
+            if view_result.is_empty() {
+                log::warn!("View result buffer is empty");
+                return;
             }
+            
+            // Write the view result data directly to the WASM-allocated buffer
+            // The WASM environment has already allocated a buffer of the correct size
+            // and ptr points to that buffer
+            if memory.write(&mut caller, ptr as usize, &view_result).is_err() {
+                log::error!("Failed to write view result data");
+                return;
+            }
+            
+            log::debug!("Wrote {} bytes of view result to WASM memory at ptr {}", view_result.len(), ptr);
         }).map_err(|e| anyhow!("Failed to register __load: {}", e))?;
         
         // Use the client passed to the runtime instead of creating a new one with hardcoded URL
@@ -234,7 +293,7 @@ impl WasmRuntime {
             retry_delay: 1000,
         }).unwrap());
         
-        linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, ()>, view_name_ptr: i32, input_ptr: i32| -> i32 {
+        linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, RuntimeState>, view_name_ptr: i32, input_ptr: i32| -> i32 {
             // Get the memory export
             let memory = match caller.get_export("memory") {
                 Some(wasmtime::Extern::Memory(mem)) => mem,
@@ -302,12 +361,11 @@ impl WasmRuntime {
                 Ok(data) => {
                     log::debug!("View call '{}' succeeded, result length: {}", view_name, data.len());
                     
-                    // Store the result in a global buffer that can be accessed by __load
-                    // For simplicity, we'll use a static buffer
-                    unsafe {
-                        VIEW_RESULT_BUFFER = data;
-                        return VIEW_RESULT_BUFFER.len() as i32;
-                    }
+                    // Store the result in the caller's state
+                    let result_len = data.len() as i32;
+                    caller.data_mut().view_result = data;
+                    
+                    return result_len;
                 },
                 Err(e) => {
                     log::error!("View call '{}' failed: {}", view_name, e);
@@ -316,7 +374,7 @@ impl WasmRuntime {
             }
         }).map_err(|e| anyhow!("Failed to register __view: {}", e))?;
         
-        linker.func_wrap(env_module, "__stdout", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+        linker.func_wrap(env_module, "__stdout", |mut caller: wasmtime::Caller<'_, RuntimeState>, ptr: i32| {
             // Read the message from WASM memory
             let memory = match caller.get_export("memory") {
                 Some(wasmtime::Extern::Memory(mem)) => mem,
@@ -342,7 +400,7 @@ impl WasmRuntime {
             }
         }).map_err(|e| anyhow!("Failed to register __stdout: {}", e))?;
         
-        linker.func_wrap(env_module, "__stderr", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+        linker.func_wrap(env_module, "__stderr", |mut caller: wasmtime::Caller<'_, RuntimeState>, ptr: i32| {
             // Read the message from WASM memory
             let memory = match caller.get_export("memory") {
                 Some(wasmtime::Extern::Memory(mem)) => mem,
@@ -467,8 +525,8 @@ impl WasmRuntime {
         self.set_current_height(height);
         self.set_current_hash(hash);
         
-        // Create a new store with our runtime data
-        let mut store = Store::new(&self.engine, ());
+        // Create a new store with our runtime state
+        let mut store = Store::new(&self.engine, RuntimeState::default());
         
         // Define host functions that will be imported by the WASM module
         let mut linker = Linker::new(&self.engine);
@@ -481,7 +539,7 @@ impl WasmRuntime {
         let current_hash_for_block_hash = self.current_hash.clone();
         
         // Register all required host functions
-        linker.func_wrap(env_module, "__load", |mut caller: wasmtime::Caller<'_, ()>, ptr: i32| {
+        linker.func_wrap(env_module, "__load", |mut caller: wasmtime::Caller<'_, RuntimeState>, ptr: i32| {
             // Get the memory export
             let memory = match caller.get_export("memory") {
                 Some(wasmtime::Extern::Memory(mem)) => mem,
@@ -491,28 +549,26 @@ impl WasmRuntime {
                 }
             };
             
-            // Write the view result to WASM memory
-            unsafe {
-                if VIEW_RESULT_BUFFER.is_empty() {
-                    log::warn!("View result buffer is empty");
-                    return;
-                }
-                
-                // Write the length first (4 bytes)
-                let len_bytes = (VIEW_RESULT_BUFFER.len() as u32).to_le_bytes();
-                if memory.write(&mut caller, ptr as usize, &len_bytes).is_err() {
-                    log::error!("Failed to write view result length");
-                    return;
-                }
-                
-                // Then write the data
-                if memory.write(&mut caller, (ptr + 4) as usize, &VIEW_RESULT_BUFFER).is_err() {
-                    log::error!("Failed to write view result data");
-                    return;
-                }
-                
-                log::debug!("Wrote {} bytes of view result to WASM memory", VIEW_RESULT_BUFFER.len());
+            // Get the view result from caller's state
+            let view_result = {
+                let state = caller.data();
+                state.view_result.clone()
+            };
+            
+            if view_result.is_empty() {
+                log::warn!("View result buffer is empty");
+                return;
             }
+            
+            // Write the view result data directly to the WASM-allocated buffer
+            // The WASM environment has already allocated a buffer of the correct size
+            // and ptr points to that buffer
+            if memory.write(&mut caller, ptr as usize, &view_result).is_err() {
+                log::error!("Failed to write view result data");
+                return;
+            }
+            
+            log::debug!("Wrote {} bytes of view result to WASM memory at ptr {}", view_result.len(), ptr);
         }).map_err(|e| anyhow!("Failed to register __load: {}", e))?;
         
         // Use the client passed to the runtime instead of creating a new one with hardcoded URL
@@ -525,7 +581,7 @@ impl WasmRuntime {
             retry_delay: 1000,
         }).unwrap());
         
-        linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, ()>, view_name_ptr: i32, input_ptr: i32| -> i32 {
+        linker.func_wrap(env_module, "__view", move |mut caller: wasmtime::Caller<'_, RuntimeState>, view_name_ptr: i32, input_ptr: i32| -> i32 {
             // Get the memory export
             let memory = match caller.get_export("memory") {
                 Some(wasmtime::Extern::Memory(mem)) => mem,
@@ -593,11 +649,11 @@ impl WasmRuntime {
                 Ok(data) => {
                     log::debug!("View call '{}' succeeded, result length: {}", view_name, data.len());
                     
-                    // Store the result in a global buffer that can be accessed by __load
-                    unsafe {
-                        VIEW_RESULT_BUFFER = data;
-                        return VIEW_RESULT_BUFFER.len() as i32;
-                    }
+                    // Store the result in the caller's state
+                    let result_len = data.len() as i32;
+                    caller.data_mut().view_result = data;
+                    
+                    return result_len;
                 },
                 Err(e) => {
                     log::error!("View call '{}' failed: {}", view_name, e);
@@ -606,11 +662,11 @@ impl WasmRuntime {
             }
         }).map_err(|e| anyhow!("Failed to register __view: {}", e))?;
         
-        linker.func_wrap(env_module, "__stdout", |_ptr: i32| {
+        linker.func_wrap(env_module, "__stdout", |_caller: wasmtime::Caller<'_, RuntimeState>, _ptr: i32| {
             // Simple stub implementation
         }).map_err(|e| anyhow!("Failed to register __stdout: {}", e))?;
         
-        linker.func_wrap(env_module, "__stderr", |_ptr: i32| {
+        linker.func_wrap(env_module, "__stderr", |_caller: wasmtime::Caller<'_, RuntimeState>, _ptr: i32| {
             // Simple stub implementation
         }).map_err(|e| anyhow!("Failed to register __stderr: {}", e))?;
         
@@ -805,7 +861,7 @@ impl WasmRuntime {
     pub fn for_testing() -> Result<Self> {
         use wat::parse_str;
         
-        // Create a simple WASM module
+        // Create a simple WASM module with larger memory for testing
         let wasm_bytes = parse_str(
             r#"
             (module
@@ -815,7 +871,7 @@ impl WasmRuntime {
                 (func $rollback (export "rollback") (result i32)
                     i32.const 0
                 )
-                (memory (export "memory") 1)
+                (memory (export "memory") 65536)
             )
             "#,
         )

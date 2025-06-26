@@ -11,6 +11,20 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use url::Url;
 
+/// Maximum length for logged response bodies (in characters)
+const MAX_RESPONSE_LOG_LENGTH: usize = 1000;
+
+/// Truncate a response string for logging purposes
+fn truncate_response_for_logging(response: &str) -> String {
+    if response.len() <= MAX_RESPONSE_LOG_LENGTH {
+        response.to_string()
+    } else {
+        format!("{}... [truncated, total length: {} chars]",
+                &response[..MAX_RESPONSE_LOG_LENGTH],
+                response.len())
+    }
+}
+
 /// Metashrew client trait
 ///
 /// This trait defines the interface for communicating with metashrew.
@@ -291,7 +305,7 @@ impl JsonRpcClient {
         let response_text = response.text().await
             .map_err(|e| Error::MetashrewClient(format!("Failed to get response text: {}", e)))?;
         
-        log::debug!("Received raw response: \n{}", response_text);
+        log::debug!("Received raw response: \n{}", truncate_response_for_logging(&response_text));
         
         // Parse the response as JSON
         let json_response: JsonRpcResponse<R> = serde_json::from_str(&response_text)
@@ -342,7 +356,7 @@ impl JsonRpcClient {
         let response_text = response.text()
             .map_err(|e| Error::MetashrewClient(format!("Failed to get response text: {}", e)))?;
         
-        log::debug!("Received raw response: \n{}", response_text);
+        log::debug!("Received raw response: \n{}", truncate_response_for_logging(&response_text));
         
         // Parse the response as JSON
         let json_response: JsonRpcResponse<R> = serde_json::from_str(&response_text)
@@ -419,7 +433,7 @@ impl SyncMetashrewClient for JsonRpcClient {
         // Call the view function
         let result: String = client.send_request_sync("metashrew_view", view_params)?;
         
-        // Pretty print and log the result
+        // Pretty print and log the result (truncated)
         log::info!("JSONRPC result from metashrew_view '{}': ", view_name);
         
         // Try to parse the result as JSON for pretty printing
@@ -428,13 +442,16 @@ impl SyncMetashrewClient for JsonRpcClient {
             let pretty_json = serde_json::to_string_pretty(&json_value)
                 .unwrap_or_else(|_| result.clone());
             
-            // Log each line of the pretty-printed JSON with proper indentation
-            for line in pretty_json.lines() {
+            // Truncate the pretty JSON for logging
+            let truncated_json = truncate_response_for_logging(&pretty_json);
+            
+            // Log each line of the truncated pretty-printed JSON with proper indentation
+            for line in truncated_json.lines() {
                 log::info!("  {}", line);
             }
         } else {
-            // If it's not valid JSON, just log the raw result
-            log::info!("  {}", result);
+            // If it's not valid JSON, just log the truncated raw result
+            log::info!("  {}", truncate_response_for_logging(&result));
         }
         
         // Strip the '0x' prefix if present
@@ -444,7 +461,7 @@ impl SyncMetashrewClient for JsonRpcClient {
             result
         };
         
-        log::debug!("Clean result (after stripping 0x prefix if present): {}", clean_result);
+        log::debug!("Clean result (after stripping 0x prefix if present): {}", truncate_response_for_logging(&clean_result));
         
         // Convert hex string to bytes
         let result_bytes = hex::decode(clean_result)
@@ -527,7 +544,7 @@ impl MetashrewClient for JsonRpcClient {
         // Call the view function
         let result: String = client.send_request("metashrew_view", view_params).await?;
         
-        // Pretty print and log the result
+        // Pretty print and log the result (truncated)
         log::info!("JSONRPC result from metashrew_view '{}': ", view_name);
         
         // Try to parse the result as JSON for pretty printing
@@ -536,13 +553,16 @@ impl MetashrewClient for JsonRpcClient {
             let pretty_json = serde_json::to_string_pretty(&json_value)
                 .unwrap_or_else(|_| result.clone());
             
-            // Log each line of the pretty-printed JSON with proper indentation
-            for line in pretty_json.lines() {
+            // Truncate the pretty JSON for logging
+            let truncated_json = truncate_response_for_logging(&pretty_json);
+            
+            // Log each line of the truncated pretty-printed JSON with proper indentation
+            for line in truncated_json.lines() {
                 log::info!("  {}", line);
             }
         } else {
-            // If it's not valid JSON, just log the raw result
-            log::info!("  {}", result);
+            // If it's not valid JSON, just log the truncated raw result
+            log::info!("  {}", truncate_response_for_logging(&result));
         }
         
         // Strip the '0x' prefix if present
@@ -552,7 +572,7 @@ impl MetashrewClient for JsonRpcClient {
             result
         };
         
-        log::debug!("Clean result (after stripping 0x prefix if present): {}", clean_result);
+        log::debug!("Clean result (after stripping 0x prefix if present): {}", truncate_response_for_logging(&clean_result));
         
         // Convert hex string to bytes
         let result_bytes = hex::decode(clean_result)
@@ -692,7 +712,7 @@ impl MetashrewClient for MockMetashrewClient {
     async fn call_view(&self, view_name: &str, params: &[u8], height: Option<u32>) -> Result<Vec<u8>> {
         for (name, p, h, result) in &self.view_results {
             if name == view_name && p == params && h == &height {
-                // Log the result for consistency with the real client
+                // Log the result for consistency with the real client (truncated)
                 log::info!("JSONRPC result from metashrew_view '{}' (mock): ", view_name);
                 
                 // Try to parse the result as JSON for pretty printing
@@ -702,13 +722,17 @@ impl MetashrewClient for MockMetashrewClient {
                     let pretty_json = serde_json::to_string_pretty(&json_value)
                         .unwrap_or_else(|_| result_str.to_string());
                     
-                    // Log each line of the pretty-printed JSON with proper indentation
-                    for line in pretty_json.lines() {
+                    // Truncate the pretty JSON for logging
+                    let truncated_json = truncate_response_for_logging(&pretty_json);
+                    
+                    // Log each line of the truncated pretty-printed JSON with proper indentation
+                    for line in truncated_json.lines() {
                         log::info!("  {}", line);
                     }
                 } else {
-                    // If it's not valid JSON, just log the raw result
-                    log::info!("  {:?}", result);
+                    // If it's not valid JSON, just log the truncated raw result
+                    let debug_str = format!("{:?}", result);
+                    log::info!("  {}", truncate_response_for_logging(&debug_str));
                 }
                 
                 return Ok(result.clone());

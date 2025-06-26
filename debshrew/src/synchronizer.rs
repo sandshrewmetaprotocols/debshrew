@@ -17,6 +17,20 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time;
 
+/// Maximum length for logged response bodies (in characters)
+const MAX_RESPONSE_LOG_LENGTH: usize = 1000;
+
+/// Truncate a response string for logging purposes
+fn truncate_response_for_logging(response: &str) -> String {
+    if response.len() <= MAX_RESPONSE_LOG_LENGTH {
+        response.to_string()
+    } else {
+        format!("{}... [truncated, total length: {} chars]",
+                &response[..MAX_RESPONSE_LOG_LENGTH],
+                response.len())
+    }
+}
+
 /// Block synchronizer
 ///
 /// The block synchronizer is responsible for synchronizing with metashrew,
@@ -744,7 +758,7 @@ impl<C: MetashrewClient> BlockSynchronizer<C> {
             }
         };
         
-        log::debug!("Received getblockcount response: {}", response_text);
+        log::debug!("Received getblockcount response: {}", truncate_response_for_logging(&response_text));
         
         let json_response: serde_json::Value = match serde_json::from_str(&response_text) {
             Ok(json) => json,

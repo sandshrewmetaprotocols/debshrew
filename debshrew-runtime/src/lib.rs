@@ -34,16 +34,21 @@ pub fn view(view_name: String, input: Vec<u8>) -> Result<Vec<u8>> {
 
     // Encode input with length prefix
     let mut encoded_input = Vec::with_capacity(4 + input.len());
-    encoded_input.extend_from_slice(&(input.len() as u32).to_ne_bytes());
+    encoded_input.extend_from_slice(&(input.len() as u32).to_le_bytes());
     encoded_input.extend_from_slice(&input);
 
+    // Call __view to get the result length and store the result in the host's state
     let length = unsafe { imports::__view(encoded_name.as_ptr() as i32, encoded_input.as_ptr() as i32) };
     if length <= 0 {
         return Err(anyhow::anyhow!("View call failed with length {}", length));
     }
     
+    // Allocate a buffer of the exact size needed
     let mut buffer = vec![0u8; length as usize];
+    
+    // Call __load to copy the result from the host's state to our allocated buffer
     unsafe { imports::__load(buffer.as_mut_ptr() as i32) };
+    
     Ok(buffer)
 }
 
