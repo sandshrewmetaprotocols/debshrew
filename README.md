@@ -114,6 +114,39 @@ Debshrew supports the following sink types:
 - **File**: Writes CDC messages to a file
 - **Console**: Outputs CDC messages to the console
 
+## Elasticsearch Integration
+
+Debshrew now includes a complete Elasticsearch integration with Kibana GUI for visualizing CDC events. This setup provides:
+
+- **Elasticsearch**: Search and analytics engine for storing CDC data
+- **Kibana**: Web-based GUI for data visualization and exploration
+- **Kafka Connect**: Automated pipeline from Kafka topics to Elasticsearch
+
+### Quick Start with Elasticsearch
+
+```bash
+# Start the complete CDC to Elasticsearch pipeline
+./run-cdc-elasticsearch-pipeline.sh start
+
+# Setup the Elasticsearch connector
+./run-cdc-elasticsearch-pipeline.sh setup
+
+# Test the pipeline
+./test-cdc-elasticsearch.sh
+
+# Access Kibana GUI
+open http://localhost:5601
+```
+
+### Service URLs
+
+- **Kibana GUI**: http://localhost:5601
+- **Elasticsearch API**: http://localhost:9200
+- **Kafka Connect API**: http://localhost:8083
+- **Kafka Bootstrap Server**: localhost:9092
+
+For detailed setup instructions, see [ELASTICSEARCH_SETUP.md](ELASTICSEARCH_SETUP.md).
+
 ## Creating Transform Modules
 
 Transform modules are WASM modules that implement the `DebTransform` trait. They are responsible for querying metashrew views, detecting changes, and generating CDC messages.
